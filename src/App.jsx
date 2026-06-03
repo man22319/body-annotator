@@ -61,61 +61,48 @@ function screenDist(ax, ay, bx, by) {
 // Snapping resolver
 // ---------------------------------------------------------------------------
 
-const BASE_SNAP_THRESHOLD_PX = 16; // threshold at zoom=1; scales with zoom
+// Snap threshold in screen pixels — constant regardless of zoom.
+// getBoundingClientRect() already returns post-transform coords, so distances
+// computed from it are already in real screen pixels. No zoom scaling needed.
+const SNAP_THRESHOLD_PX = 14;
 
 /**
  * Structured snap resolver.
  *
  * Priority order:
  *   1. First vertex of current polygon (closure) — only when pts.length >= 3
- *   2. Other vertices of current polygon
- *   3. Vertices of existing completed regions
+ *   2. Vertices of existing completed regions (shared edges between polygons)
  *
- * Within each tier we take the closest point inside the threshold.
- * A higher-priority tier always wins over a lower one, even if the
- * lower-priority point is closer.
+ * Snapping to the polygon's own non-first vertices is intentionally excluded:
+ * it causes false snaps when drawing near recently placed points and
+ * interferes with fine placement at high zoom.
  *
- * @param {number} clientX  - raw event clientX
- * @param {number} clientY  - raw event clientY
- * @param {DOMRect} rect    - imgEl.getBoundingClientRect()
- * @param {number[][]} currentPoints - normalized points of polygon in progress
+ * The threshold is a fixed screen-pixel distance so the snap feel is
+ * identical regardless of zoom level. normToScreen uses getBoundingClientRect
+ * which already reflects the CSS transform, giving true screen coordinates.
+ *
+ * @param {number} clientX
+ * @param {number} clientY
+ * @param {DOMRect} rect    - imgEl.getBoundingClientRect() (post-transform)
+ * @param {number[][]} currentPoints
  * @param {object[]} regions - completed regions for current view
- * @param {number} zoom     - current zoom level (threshold scales inversely)
  * @returns {{ coords: number[], isFirstPoint: boolean } | null}
  */
-function resolveSnap(clientX, clientY, rect, currentPoints, regions, zoom) {
-  // Scale threshold so it feels consistent regardless of zoom.
-  // At zoom=2 the image is twice as large in screen space, so 16px
-  // covers the same normalized area as 8px at zoom=1.  We want the
-  // *feel* to be constant, so we scale the pixel threshold with zoom.
-  const threshold = BASE_SNAP_THRESHOLD_PX * zoom;
-
+function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
   // --- Tier 1: first vertex (polygon closure) ---
   if (currentPoints.length >= 3) {
     const first = currentPoints[0];
     const s = normToScreen(first, rect);
     const d = screenDist(clientX, clientY, s.x, s.y);
-    if (d < threshold) {
+    if (d < SNAP_THRESHOLD_PX) {
       return { coords: first, isFirstPoint: true };
     }
   }
 
-  // --- Tier 2: remaining current polygon vertices ---
+  // --- Tier 2: vertices of completed regions (shared-edge snapping) ---
   let best = null;
-  let bestDist = threshold;
+  let bestDist = SNAP_THRESHOLD_PX;
 
-  for (let i = 1; i < currentPoints.length; i++) {
-    const s = normToScreen(currentPoints[i], rect);
-    const d = screenDist(clientX, clientY, s.x, s.y);
-    if (d < bestDist) {
-      bestDist = d;
-      best = { coords: currentPoints[i], isFirstPoint: false };
-    }
-  }
-  if (best) return best;
-
-  // --- Tier 3: existing completed regions ---
-  bestDist = threshold;
   for (const region of regions) {
     for (const pt of region.points) {
       const s = normToScreen(pt, rect);
@@ -254,8 +241,8 @@ export default function App() {
   const getSnappedPoint = useCallback((clientX, clientY) => {
     if (!imgRef.current) return null;
     const rect = imgRef.current.getBoundingClientRect();
-    return resolveSnap(clientX, clientY, rect, currentPoints, regionsByView[view], zoom);
-  }, [currentPoints, regionsByView, view, zoom]);
+    return resolveSnap(clientX, clientY, rect, currentPoints, regionsByView[view]);
+  }, [currentPoints, regionsByView, view]);
 
   // ---------------------------------------------------------------------------
   // handleFinishRegion — declared BEFORE handleCanvasClick so it can be
@@ -357,10 +344,12 @@ export default function App() {
 
   const totalRegions = VIEWS.reduce((acc, v) => acc + regionsByView[v].length, 0);
 
-  // Wheel zoom
+  // Multiplicative wheel zoom: each scroll tick multiplies by a fixed factor,
+  // so the zoom step feels proportionally equal whether at 50% or 800%.
   const handleWheel = useCallback((e) => {
     e.preventDefault();
-    setZoom(z => Math.min(4, Math.max(0.5, z - e.deltaY * 0.001)));
+    const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+    setZoom(z => Math.min(8, Math.max(0.5, z * factor)));
   }, []);
 
   useEffect(() => {
@@ -536,6 +525,8 @@ export default function App() {
                   const color = getColor(ri);
                   const pts = toSVGStr(region.points);
                   const first = toXY(region.points[0]);
+                  const sw = (hoveredId === region.id ? 2 : 1.5) / zoom;
+                  const labelSize = 10 / zoom;
                   return (
                     <g key={region.id}>
                       <polygon
@@ -543,7 +534,7 @@ export default function App() {
                         fill={color}
                         fillOpacity={hoveredId === region.id ? 0.45 : 0.25}
                         stroke={color}
-                        strokeWidth={hoveredId === region.id ? 2 : 1.5}
+                        strokeWidth={sw}
                         vectorEffect="non-scaling-stroke"
                         style={{ cursor: "pointer" }}
                         onMouseEnter={() => setHoveredId(region.id)}
@@ -551,9 +542,9 @@ export default function App() {
                         onClick={e => e.stopPropagation()}
                       />
                       <text
-                        x={first.x} y={first.y - 6}
+                        x={first.x} y={first.y - 6 / zoom}
                         fill={color}
-                        fontSize="10"
+                        fontSize={labelSize}
                         fontFamily="IBM Plex Mono, monospace"
                         letterSpacing="0.06em"
                         style={{ pointerEvents: "none", userSelect: "none" }}
@@ -570,53 +561,63 @@ export default function App() {
                     points={toSVGStr(currentPoints)}
                     fill="none"
                     stroke="#facc15"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 2"
+                    strokeWidth={1.5 / zoom}
+                    strokeDasharray={`${4 / zoom} ${2 / zoom}`}
                     vectorEffect="non-scaling-stroke"
                   />
                 )}
 
-                {/* Current vertex dots */}
+                {/* Current vertex dots — radius and stroke divided by zoom so
+                    they stay a constant screen size regardless of zoom level */}
                 {currentPoints.map((pt, i) => {
                   const { x, y } = toXY(pt);
+                  const r = (i === 0 ? 4 : 2.5) / zoom;
+                  const sw = 1 / zoom;
                   return (
                     <circle
                       key={i}
                       cx={x} cy={y}
-                      r={i === 0 ? 5 : 3.5}
+                      r={r}
                       fill={i === 0 ? "#facc15" : "#fde68a"}
                       stroke="#0f0f0f"
-                      strokeWidth={1}
+                      strokeWidth={sw}
                       vectorEffect="non-scaling-stroke"
                     />
                   );
                 })}
 
-                {/* Snapping indicator */}
-                {activeSnap && (
-                  <g>
-                    <circle
-                      cx={toXY(activeSnap.coords).x}
-                      cy={toXY(activeSnap.coords).y}
-                      r={activeSnap.isFirstPoint ? 8 : 6}
-                      fill={activeSnap.isFirstPoint ? "rgba(74, 222, 128, 0.2)" : "rgba(250, 204, 21, 0.2)"}
-                      stroke={activeSnap.isFirstPoint ? "#4ade80" : "#facc15"}
-                      strokeWidth={2}
-                      strokeDasharray="4 2"
-                      style={{ pointerEvents: "none" }}
-                    />
-                    <text
-                      x={toXY(activeSnap.coords).x + 12}
-                      y={toXY(activeSnap.coords).y + 4}
-                      fill={activeSnap.isFirstPoint ? "#4ade80" : "#facc15"}
-                      fontSize="9"
-                      fontFamily="IBM Plex Mono, monospace"
-                      style={{ pointerEvents: "none", userSelect: "none", fontWeight: "bold" }}
-                    >
-                      {activeSnap.isFirstPoint ? "Close Shape" : "Snap"}
-                    </text>
-                  </g>
-                )}
+                {/* Snapping indicator — sizes divided by zoom for screen-invariant appearance */}
+                {activeSnap && (() => {
+                  const { x, y } = toXY(activeSnap.coords);
+                  const r = (activeSnap.isFirstPoint ? 7 : 5) / zoom;
+                  const sw = 1.5 / zoom;
+                  const fontSize = 9 / zoom;
+                  const labelOffset = 10 / zoom;
+                  return (
+                    <g>
+                      <circle
+                        cx={x} cy={y}
+                        r={r}
+                        fill={activeSnap.isFirstPoint ? "rgba(74, 222, 128, 0.2)" : "rgba(250, 204, 21, 0.15)"}
+                        stroke={activeSnap.isFirstPoint ? "#4ade80" : "#facc15"}
+                        strokeWidth={sw}
+                        strokeDasharray={`${3 / zoom} ${2 / zoom}`}
+                        style={{ pointerEvents: "none" }}
+                      />
+                      {activeSnap.isFirstPoint && (
+                        <text
+                          x={x + labelOffset} y={y + fontSize * 0.4}
+                          fill="#4ade80"
+                          fontSize={fontSize}
+                          fontFamily="IBM Plex Mono, monospace"
+                          style={{ pointerEvents: "none", userSelect: "none", fontWeight: "bold" }}
+                        >
+                          Close
+                        </text>
+                      )}
+                    </g>
+                  );
+                })()}
               </svg>
             </div>
           )}
@@ -651,7 +652,7 @@ export default function App() {
 
               {/* Zoom Controls */}
               <button
-                onClick={() => setZoom(z => Math.max(0.5, z - 0.25))}
+                onClick={() => setZoom(z => Math.max(0.5, z / 1.25))}
                 style={toolbarBtnStyle(false)}
                 title="Zoom Out (Scroll Down)"
               >
@@ -661,7 +662,7 @@ export default function App() {
                 {Math.round(zoom * 100)}%
               </span>
               <button
-                onClick={() => setZoom(z => Math.min(4, z + 0.25))}
+                onClick={() => setZoom(z => Math.min(8, z * 1.25))}
                 style={toolbarBtnStyle(false)}
                 title="Zoom In (Scroll Up)"
               >
