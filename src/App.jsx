@@ -22,13 +22,111 @@ function downloadJSON(data) {
   URL.revokeObjectURL(url);
 }
 
-// FIX 1: single canonical point function — called from event handlers only, never render
-function getPoint(e, imgEl) {
+// ---------------------------------------------------------------------------
+// Coordinate utilities — pure functions, no React deps
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a mouse event to normalized [0,1] image coordinates.
+ * Uses the transformed BoundingClientRect of imgEl (correct: includes zoom/pan).
+ * Returns null if the point is outside the image.
+ */
+function eventToNorm(e, imgEl) {
   const rect = imgEl.getBoundingClientRect();
   const x = parseFloat(((e.clientX - rect.left) / rect.width).toFixed(4));
   const y = parseFloat(((e.clientY - rect.top) / rect.height).toFixed(4));
   if (x < 0 || x > 1 || y < 0 || y > 1) return null;
   return [x, y];
+}
+
+/**
+ * Convert a normalized point to page-space pixel coordinates,
+ * using the live BoundingClientRect (post-transform).
+ */
+function normToScreen(normPt, rect) {
+  return {
+    x: rect.left + normPt[0] * rect.width,
+    y: rect.top  + normPt[1] * rect.height,
+  };
+}
+
+/**
+ * Pixel distance between two page-space points.
+ */
+function screenDist(ax, ay, bx, by) {
+  return Math.hypot(ax - bx, ay - by);
+}
+
+// ---------------------------------------------------------------------------
+// Snapping resolver
+// ---------------------------------------------------------------------------
+
+const BASE_SNAP_THRESHOLD_PX = 16; // threshold at zoom=1; scales with zoom
+
+/**
+ * Structured snap resolver.
+ *
+ * Priority order:
+ *   1. First vertex of current polygon (closure) — only when pts.length >= 3
+ *   2. Other vertices of current polygon
+ *   3. Vertices of existing completed regions
+ *
+ * Within each tier we take the closest point inside the threshold.
+ * A higher-priority tier always wins over a lower one, even if the
+ * lower-priority point is closer.
+ *
+ * @param {number} clientX  - raw event clientX
+ * @param {number} clientY  - raw event clientY
+ * @param {DOMRect} rect    - imgEl.getBoundingClientRect()
+ * @param {number[][]} currentPoints - normalized points of polygon in progress
+ * @param {object[]} regions - completed regions for current view
+ * @param {number} zoom     - current zoom level (threshold scales inversely)
+ * @returns {{ coords: number[], isFirstPoint: boolean } | null}
+ */
+function resolveSnap(clientX, clientY, rect, currentPoints, regions, zoom) {
+  // Scale threshold so it feels consistent regardless of zoom.
+  // At zoom=2 the image is twice as large in screen space, so 16px
+  // covers the same normalized area as 8px at zoom=1.  We want the
+  // *feel* to be constant, so we scale the pixel threshold with zoom.
+  const threshold = BASE_SNAP_THRESHOLD_PX * zoom;
+
+  // --- Tier 1: first vertex (polygon closure) ---
+  if (currentPoints.length >= 3) {
+    const first = currentPoints[0];
+    const s = normToScreen(first, rect);
+    const d = screenDist(clientX, clientY, s.x, s.y);
+    if (d < threshold) {
+      return { coords: first, isFirstPoint: true };
+    }
+  }
+
+  // --- Tier 2: remaining current polygon vertices ---
+  let best = null;
+  let bestDist = threshold;
+
+  for (let i = 1; i < currentPoints.length; i++) {
+    const s = normToScreen(currentPoints[i], rect);
+    const d = screenDist(clientX, clientY, s.x, s.y);
+    if (d < bestDist) {
+      bestDist = d;
+      best = { coords: currentPoints[i], isFirstPoint: false };
+    }
+  }
+  if (best) return best;
+
+  // --- Tier 3: existing completed regions ---
+  bestDist = threshold;
+  for (const region of regions) {
+    for (const pt of region.points) {
+      const s = normToScreen(pt, rect);
+      const d = screenDist(clientX, clientY, s.x, s.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { coords: pt, isFirstPoint: false };
+      }
+    }
+  }
+  return best;
 }
 
 export default function App() {
@@ -46,6 +144,7 @@ export default function App() {
   const [mode, setMode] = useState("draw"); // "draw" or "pan"
   const [isDragging, setIsDragging] = useState(false);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [activeSnap, setActiveSnap] = useState(null);
 
   const containerRef = useRef(null);
   const imgRef = useRef(null);
@@ -149,40 +248,19 @@ export default function App() {
     };
   }, [isDragging]);
 
-  const handleCanvasClick = useCallback((e) => {
-    // Only draw on left click (button 0)
-    if (e.button !== 0) return;
-    
-    // Don't draw if we are in pan mode or spacebar is pressed
-    if (mode === "pan" || isSpacePressed) return;
-    
-    if (!images[view] || !imgRef.current) return;
-    
-    // Check if we just finished dragging/panning
-    const dx = Math.abs(e.clientX - dragStartRef.current.x);
-    const dy = Math.abs(e.clientY - dragStartRef.current.y);
-    if (dx > 3 || dy > 3) return; // ignore click if it was a drag
+  // ---------------------------------------------------------------------------
+  // Snap helper — thin wrapper around the module-level resolveSnap
+  // ---------------------------------------------------------------------------
+  const getSnappedPoint = useCallback((clientX, clientY) => {
+    if (!imgRef.current) return null;
+    const rect = imgRef.current.getBoundingClientRect();
+    return resolveSnap(clientX, clientY, rect, currentPoints, regionsByView[view], zoom);
+  }, [currentPoints, regionsByView, view, zoom]);
 
-    const pt = getPoint(e, imgRef.current);
-    if (!pt) return;
-    setCurrentPoints(prev => [...prev, pt]);
-  }, [images, view, mode, isSpacePressed]);
-
-  const handleDoubleClick = useCallback((e) => {
-    if (e.target === containerRef.current || e.target === imgRef.current) {
-      setZoom(1);
-      setPanOffset({ x: 0, y: 0 });
-    }
-  }, []);
-
-  const handleContextMenu = useCallback((e) => {
-    // Prevent context menu during panning or right-click drag
-    const isPanActive = mode === "pan" || isSpacePressed || isDragging || e.button === 2;
-    if (isPanActive) {
-      e.preventDefault();
-    }
-  }, [mode, isSpacePressed, isDragging]);
-
+  // ---------------------------------------------------------------------------
+  // handleFinishRegion — declared BEFORE handleCanvasClick so it can be
+  // referenced in handleCanvasClick's dependency array without a TDZ error.
+  // ---------------------------------------------------------------------------
   const handleFinishRegion = useCallback(() => {
     if (currentPoints.length < 3) return;
     const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
@@ -195,7 +273,65 @@ export default function App() {
     setRegionsByView(prev => ({ ...prev, [view]: [...prev[view], region] }));
     setCurrentPoints([]);
     setRegionName("");
+    setActiveSnap(null);
   }, [currentPoints, regionName, view, regionsByView]);
+
+  // ---------------------------------------------------------------------------
+  // Canvas interaction handlers
+  // ---------------------------------------------------------------------------
+  const handleCanvasMouseMove = useCallback((e) => {
+    if (isDragging) return;
+    if (mode === "draw" && !isSpacePressed && images[view]) {
+      const snap = getSnappedPoint(e.clientX, e.clientY);
+      setActiveSnap(snap);
+    } else {
+      setActiveSnap(null);
+    }
+  }, [mode, isSpacePressed, isDragging, images, view, getSnappedPoint]);
+
+  const handleCanvasClick = useCallback((e) => {
+    if (e.button !== 0) return;
+    if (mode === "pan" || isSpacePressed) return;
+    if (!images[view] || !imgRef.current) return;
+
+    // Suppress clicks that were drags
+    const dx = Math.abs(e.clientX - dragStartRef.current.x);
+    const dy = Math.abs(e.clientY - dragStartRef.current.y);
+    if (dx > 3 || dy > 3) return;
+
+    // Re-use the already-computed activeSnap when available so the click
+    // snaps to exactly the vertex the indicator showed.  Fall back to a
+    // fresh resolve for edge cases (first click, touch, etc.).
+    const snap = activeSnap ?? getSnappedPoint(e.clientX, e.clientY);
+
+    if (snap?.isFirstPoint) {
+      // resolveSnap only sets isFirstPoint when currentPoints.length >= 3
+      handleFinishRegion();
+      setActiveSnap(null);
+      return;
+    }
+
+    if (snap) {
+      setCurrentPoints(prev => [...prev, snap.coords]);
+      return;
+    }
+
+    const pt = eventToNorm(e, imgRef.current);
+    if (!pt) return;
+    setCurrentPoints(prev => [...prev, pt]);
+  }, [images, view, mode, isSpacePressed, activeSnap, getSnappedPoint, handleFinishRegion]);
+
+  const handleDoubleClick = useCallback((e) => {
+    if (e.target === containerRef.current || e.target === imgRef.current) {
+      setZoom(1);
+      setPanOffset({ x: 0, y: 0 });
+    }
+  }, []);
+
+  const handleContextMenu = useCallback((e) => {
+    const isPanActive = mode === "pan" || isSpacePressed || isDragging || e.button === 2;
+    if (isPanActive) e.preventDefault();
+  }, [mode, isSpacePressed, isDragging]);
 
   const handleUndoPoint = useCallback(() => {
     setCurrentPoints(prev => prev.slice(0, -1));
@@ -291,6 +427,7 @@ export default function App() {
             setCurrentPoints([]); 
             setZoom(1);
             setPanOffset({ x: 0, y: 0 });
+            setActiveSnap(null);
           }} style={{
             padding: "8px 20px",
             background: view === v ? "#1a1a1a" : "transparent",
@@ -335,9 +472,11 @@ export default function App() {
             justifyContent: "center",
           }}
           onMouseDown={handleMouseDown}
+          onMouseMove={handleCanvasMouseMove}
           onClick={handleCanvasClick}
           onDoubleClick={handleDoubleClick}
           onContextMenu={handleContextMenu}
+          onMouseLeave={() => setActiveSnap(null)}
         >
           {!images[view] ? (
             <label style={{
@@ -452,6 +591,32 @@ export default function App() {
                     />
                   );
                 })}
+
+                {/* Snapping indicator */}
+                {activeSnap && (
+                  <g>
+                    <circle
+                      cx={toXY(activeSnap.coords).x}
+                      cy={toXY(activeSnap.coords).y}
+                      r={activeSnap.isFirstPoint ? 8 : 6}
+                      fill={activeSnap.isFirstPoint ? "rgba(74, 222, 128, 0.2)" : "rgba(250, 204, 21, 0.2)"}
+                      stroke={activeSnap.isFirstPoint ? "#4ade80" : "#facc15"}
+                      strokeWidth={2}
+                      strokeDasharray="4 2"
+                      style={{ pointerEvents: "none" }}
+                    />
+                    <text
+                      x={toXY(activeSnap.coords).x + 12}
+                      y={toXY(activeSnap.coords).y + 4}
+                      fill={activeSnap.isFirstPoint ? "#4ade80" : "#facc15"}
+                      fontSize="9"
+                      fontFamily="IBM Plex Mono, monospace"
+                      style={{ pointerEvents: "none", userSelect: "none", fontWeight: "bold" }}
+                    >
+                      {activeSnap.isFirstPoint ? "Close Shape" : "Snap"}
+                    </text>
+                  </g>
+                )}
               </svg>
             </div>
           )}
