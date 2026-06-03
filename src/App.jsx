@@ -109,6 +109,9 @@ export default function App() {
 
   // Handle canvas mouse down to start panning
   const handleMouseDown = useCallback((e) => {
+    // Always track mouse start position to calculate drag distance correctly in handleCanvasClick
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+
     const isPanActive = mode === "pan" || isSpacePressed || e.button === 1 || e.button === 2;
     if (!isPanActive) return;
 
@@ -117,7 +120,6 @@ export default function App() {
     }
 
     setIsDragging(true);
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
     dragOffsetStartRef.current = { ...panOffset };
   }, [mode, isSpacePressed, panOffset]);
 
