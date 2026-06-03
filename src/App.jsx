@@ -104,12 +104,13 @@ function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
   let bestDist = SNAP_THRESHOLD_PX;
 
   for (const region of regions) {
-    for (const pt of region.points) {
+    for (let i = 0; i < region.points.length; i++) {
+      const pt = region.points[i];
       const s = normToScreen(pt, rect);
       const d = screenDist(clientX, clientY, s.x, s.y);
       if (d < bestDist) {
         bestDist = d;
-        best = { coords: pt, isFirstPoint: false };
+        best = { coords: pt, isFirstPoint: false, regionId: region.id, pointIndex: i };
       }
     }
   }
@@ -137,6 +138,9 @@ export default function App() {
   const imgRef = useRef(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const dragOffsetStartRef = useRef({ x: 0, y: 0 });
+  // Parallel metadata for currentPoints: snapMeta[i] = { regionId, pointIndex } | null
+  // Tracks which points were snapped from existing regions, without polluting exported coords.
+  const snapMetaRef = useRef([]);
 
   const handleImageUpload = useCallback((e, targetView) => {
     const file = e.target.files[0];
@@ -261,6 +265,7 @@ export default function App() {
     setCurrentPoints([]);
     setRegionName("");
     setActiveSnap(null);
+    snapMetaRef.current = [];
   }, [currentPoints, regionName, view, regionsByView]);
 
   // ---------------------------------------------------------------------------
@@ -286,27 +291,59 @@ export default function App() {
     const dy = Math.abs(e.clientY - dragStartRef.current.y);
     if (dx > 3 || dy > 3) return;
 
-    // Re-use the already-computed activeSnap when available so the click
-    // snaps to exactly the vertex the indicator showed.  Fall back to a
-    // fresh resolve for edge cases (first click, touch, etc.).
     const snap = activeSnap ?? getSnappedPoint(e.clientX, e.clientY);
 
     if (snap?.isFirstPoint) {
-      // resolveSnap only sets isFirstPoint when currentPoints.length >= 3
       handleFinishRegion();
       setActiveSnap(null);
       return;
     }
 
     if (snap) {
+      const meta = snap.regionId ? { regionId: snap.regionId, pointIndex: snap.pointIndex } : null;
+      const firstMeta = snapMetaRef.current[0];
+
+      // Shared-edge auto-close: the new snap point is from the same region as
+      // the first point, we have at least 1 free point in between (so the
+      // polygon has 3+ vertices including the two shared ones), and the two
+      // shared points are not the same vertex (which would be a degenerate loop).
+      const isSharedEdgeClose =
+        meta &&
+        firstMeta &&
+        meta.regionId === firstMeta.regionId &&
+        meta.pointIndex !== firstMeta.pointIndex &&
+        currentPoints.length >= 1; // at least 1 point already placed
+
+      if (isSharedEdgeClose) {
+        const closed = [...currentPoints, snap.coords];
+        if (closed.length >= 3) {
+          const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
+          const region = { id: crypto.randomUUID(), name, view, points: closed };
+          setRegionsByView(p => ({ ...p, [view]: [...p[view], region] }));
+          setCurrentPoints([]);
+          setRegionName("");
+          setActiveSnap(null);
+          snapMetaRef.current = [];
+        } else {
+          // Not enough points yet — just append (shouldn't normally happen)
+          snapMetaRef.current = [...snapMetaRef.current, meta];
+          setCurrentPoints(closed);
+        }
+        return;
+      }
+
+      // Normal snap: add the point and record its metadata
+      snapMetaRef.current = [...snapMetaRef.current, meta];
       setCurrentPoints(prev => [...prev, snap.coords]);
       return;
     }
 
+    // Free placement — no snap
+    snapMetaRef.current = [...snapMetaRef.current, null];
     const pt = eventToNorm(e, imgRef.current);
     if (!pt) return;
     setCurrentPoints(prev => [...prev, pt]);
-  }, [images, view, mode, isSpacePressed, activeSnap, getSnappedPoint, handleFinishRegion]);
+  }, [images, view, mode, isSpacePressed, activeSnap, currentPoints, regionName, regionsByView, getSnappedPoint, handleFinishRegion]);
 
   const handleDoubleClick = useCallback((e) => {
     if (e.target === containerRef.current || e.target === imgRef.current) {
@@ -321,6 +358,7 @@ export default function App() {
   }, [mode, isSpacePressed, isDragging]);
 
   const handleUndoPoint = useCallback(() => {
+    snapMetaRef.current = snapMetaRef.current.slice(0, -1);
     setCurrentPoints(prev => prev.slice(0, -1));
   }, []);
 
@@ -414,6 +452,7 @@ export default function App() {
           <button key={v} onClick={() => { 
             setView(v); 
             setCurrentPoints([]); 
+            snapMetaRef.current = [];
             setZoom(1);
             setPanOffset({ x: 0, y: 0 });
             setActiveSnap(null);
@@ -539,7 +578,7 @@ export default function App() {
                         style={{ cursor: "pointer" }}
                         onMouseEnter={() => setHoveredId(region.id)}
                         onMouseLeave={() => setHoveredId(null)}
-                        onClick={e => e.stopPropagation()}
+                        onClick={e => { if (mode !== "draw") e.stopPropagation(); }}
                       />
                       <text
                         x={first.x} y={first.y - 6 / zoom}
@@ -757,7 +796,7 @@ export default function App() {
             </div>
             {currentPoints.length > 0 && (
               <button
-                onClick={() => setCurrentPoints([])}
+                onClick={() => { snapMetaRef.current = []; setCurrentPoints([]); }}
                 style={{ ...btnStyle("#1a1a1a", "#555", false), width: "100%", fontSize: 11 }}
               >
                 Discard
