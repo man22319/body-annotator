@@ -34,17 +34,23 @@ function getPoint(e, imgEl) {
 export default function App() {
   const [view, setView] = useState("front");
   const [images, setImages] = useState({ front: null, back: null, side: null });
-  // FIX 3: store rendered bounds once on load/resize, no DOM reads during render
   const [bounds, setBounds] = useState({ front: null, back: null, side: null });
   const [regionsByView, setRegionsByView] = useState({ front: [], back: [], side: [] });
   const [currentPoints, setCurrentPoints] = useState([]);
   const [regionName, setRegionName] = useState("");
-  // FIX 4: hover by stable ID, not index
   const [hoveredId, setHoveredId] = useState(null);
-  // FIX 2: zoom only, pan removed entirely
+  
+  // Viewport zoom & pan
   const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [mode, setMode] = useState("draw"); // "draw" or "pan"
+  const [isDragging, setIsDragging] = useState(false);
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+
   const containerRef = useRef(null);
   const imgRef = useRef(null);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const dragOffsetStartRef = useRef({ x: 0, y: 0 });
 
   const handleImageUpload = useCallback((e, targetView) => {
     const file = e.target.files[0];
@@ -54,30 +60,130 @@ export default function App() {
     setBounds(prev => ({ ...prev, [targetView]: null }));
   }, []);
 
-  // FIX 3: capture bounds on image load and on resize
-  const captureBounds = useCallback(() => {
-    if (!imgRef.current) return;
-    const r = imgRef.current.getBoundingClientRect();
-    setBounds(prev => ({ ...prev, [view]: { width: r.width, height: r.height } }));
-  }, [view]);
-
+  // Set up ResizeObserver to track the unscaled layout bounds of the image.
+  // This handles initial load, window resize, and view switches automatically.
   useEffect(() => {
-    window.addEventListener("resize", captureBounds);
-    return () => window.removeEventListener("resize", captureBounds);
-  }, [captureBounds]);
+    if (!imgRef.current) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // contentRect gives the dimensions before CSS scale/translate transforms are applied
+        const { width, height } = entry.contentRect;
+        setBounds(prev => ({ ...prev, [view]: { width, height } }));
+      }
+    });
+
+    observer.observe(imgRef.current);
+    return () => observer.disconnect();
+  }, [images, view]);
+
+  // Track Spacebar to toggle pan mode temporarily
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.code === "Space" && document.activeElement.tagName !== "INPUT") {
+        e.preventDefault();
+        setIsSpacePressed(true);
+      }
+    };
+
+    const handleKeyUp = (e) => {
+      if (e.code === "Space") {
+        setIsSpacePressed(false);
+      }
+    };
+
+    const handleBlur = () => {
+      setIsSpacePressed(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, []);
+
+  // Handle canvas mouse down to start panning
+  const handleMouseDown = useCallback((e) => {
+    const isPanActive = mode === "pan" || isSpacePressed || e.button === 1 || e.button === 2;
+    if (!isPanActive) return;
+
+    if (e.button === 2) {
+      e.preventDefault();
+    }
+
+    setIsDragging(true);
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    dragOffsetStartRef.current = { ...panOffset };
+  }, [mode, isSpacePressed, panOffset]);
+
+  // Handle window mouse move and mouse up when panning is active
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleWindowMouseMove = (e) => {
+      const dx = e.clientX - dragStartRef.current.x;
+      const dy = e.clientY - dragStartRef.current.y;
+      setPanOffset({
+        x: dragOffsetStartRef.current.x + dx,
+        y: dragOffsetStartRef.current.y + dy,
+      });
+    };
+
+    const handleWindowMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+  }, [isDragging]);
 
   const handleCanvasClick = useCallback((e) => {
+    // Only draw on left click (button 0)
+    if (e.button !== 0) return;
+    
+    // Don't draw if we are in pan mode or spacebar is pressed
+    if (mode === "pan" || isSpacePressed) return;
+    
     if (!images[view] || !imgRef.current) return;
-    const pt = getPoint(e, imgRef.current); // FIX 1: single function
+    
+    // Check if we just finished dragging/panning
+    const dx = Math.abs(e.clientX - dragStartRef.current.x);
+    const dy = Math.abs(e.clientY - dragStartRef.current.y);
+    if (dx > 3 || dy > 3) return; // ignore click if it was a drag
+
+    const pt = getPoint(e, imgRef.current);
     if (!pt) return;
     setCurrentPoints(prev => [...prev, pt]);
-  }, [images, view]);
+  }, [images, view, mode, isSpacePressed]);
+
+  const handleDoubleClick = useCallback((e) => {
+    if (e.target === containerRef.current || e.target === imgRef.current) {
+      setZoom(1);
+      setPanOffset({ x: 0, y: 0 });
+    }
+  }, []);
+
+  const handleContextMenu = useCallback((e) => {
+    // Prevent context menu during panning or right-click drag
+    const isPanActive = mode === "pan" || isSpacePressed || isDragging || e.button === 2;
+    if (isPanActive) {
+      e.preventDefault();
+    }
+  }, [mode, isSpacePressed, isDragging]);
 
   const handleFinishRegion = useCallback(() => {
     if (currentPoints.length < 3) return;
     const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
-    // FIX 4: stable UUID id, name separate
-    // FIX 5: namespace export key with view to prevent silent collision
     const region = {
       id: crypto.randomUUID(),
       name,
@@ -96,7 +202,7 @@ export default function App() {
   const handleDeleteRegion = useCallback((id) => {
     setRegionsByView(prev => ({
       ...prev,
-      [view]: prev[view].filter(r => r.id !== id), // FIX 4: by ID
+      [view]: prev[view].filter(r => r.id !== id),
     }));
   }, [view]);
 
@@ -104,7 +210,6 @@ export default function App() {
     const output = {};
     for (const v of VIEWS) {
       for (const region of regionsByView[v]) {
-        // FIX 5: namespace key → no silent overwrite
         const key = `${v}_${region.name}`;
         output[key] = { view: region.view, points: region.points };
       }
@@ -114,7 +219,7 @@ export default function App() {
 
   const totalRegions = VIEWS.reduce((acc, v) => acc + regionsByView[v].length, 0);
 
-  // Wheel zoom — no pan
+  // Wheel zoom
   const handleWheel = useCallback((e) => {
     e.preventDefault();
     setZoom(z => Math.min(4, Math.max(0.5, z - e.deltaY * 0.001)));
@@ -127,7 +232,6 @@ export default function App() {
     return () => el.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
 
-  // FIX 3: use stored bounds for SVG coordinate math, never read DOM during render
   const toSVGStr = useCallback((pts) => {
     const b = bounds[view];
     if (!b) return "";
@@ -142,12 +246,14 @@ export default function App() {
 
   return (
     <div style={{
-      minHeight: "100vh",
+      width: "100%",
+      height: "100%",
       background: "#0f0f0f",
       color: "#e8e6e0",
       fontFamily: "'IBM Plex Mono', 'Courier New', monospace",
       display: "flex",
       flexDirection: "column",
+      overflow: "hidden",
     }}>
       {/* Header */}
       <div style={{
@@ -157,6 +263,7 @@ export default function App() {
         alignItems: "center",
         justifyContent: "space-between",
         background: "#111",
+        zIndex: 5,
       }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.12em", color: "#e8e6e0", textTransform: "uppercase" }}>
@@ -175,9 +282,14 @@ export default function App() {
       </div>
 
       {/* View tabs */}
-      <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a", background: "#111" }}>
+      <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a", background: "#111", zIndex: 5 }}>
         {VIEWS.map(v => (
-          <button key={v} onClick={() => { setView(v); setCurrentPoints([]); }} style={{
+          <button key={v} onClick={() => { 
+            setView(v); 
+            setCurrentPoints([]); 
+            setZoom(1);
+            setPanOffset({ x: 0, y: 0 });
+          }} style={{
             padding: "8px 20px",
             background: view === v ? "#1a1a1a" : "transparent",
             color: view === v ? "#e8e6e0" : "#555",
@@ -201,20 +313,29 @@ export default function App() {
         ))}
       </div>
 
-      {/* Main */}
+      {/* Main Container */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {/* Canvas */}
-        <div ref={containerRef} style={{
-          flex: 1,
-          position: "relative",
-          overflow: "hidden",
-          background: "#0a0a0a",
-          cursor: images[view] ? "crosshair" : "default",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
+        <div 
+          ref={containerRef} 
+          style={{
+            flex: 1,
+            position: "relative",
+            overflow: "hidden",
+            background: "#0a0a0a",
+            cursor: !images[view] 
+              ? "default" 
+              : (mode === "pan" || isSpacePressed) 
+                ? (isDragging ? "grabbing" : "grab") 
+                : "crosshair",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onMouseDown={handleMouseDown}
           onClick={handleCanvasClick}
+          onDoubleClick={handleDoubleClick}
+          onContextMenu={handleContextMenu}
         >
           {!images[view] ? (
             <label style={{
@@ -240,17 +361,16 @@ export default function App() {
                 onChange={e => handleImageUpload(e, view)} />
             </label>
           ) : (
-            // FIX 2: scale only, no translate pan
             <div style={{
               position: "relative",
-              transform: `scale(${zoom})`,
+              transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
               transformOrigin: "center center",
               userSelect: "none",
+              transition: isDragging ? "none" : "transform 0.15s ease-out",
             }}>
               <img
                 ref={imgRef}
                 src={images[view]}
-                onLoad={captureBounds}  // FIX 3: capture on load
                 alt={view}
                 draggable={false}
                 style={{
@@ -270,7 +390,7 @@ export default function App() {
                   overflow: "visible",
                 }}
               >
-                {/* Completed regions — FIX 3+4: bounds-based coords, hovered by ID */}
+                {/* Completed regions */}
                 {regionsByView[view].map((region, ri) => {
                   const color = getColor(ri);
                   const pts = toSVGStr(region.points);
@@ -283,6 +403,7 @@ export default function App() {
                         fillOpacity={hoveredId === region.id ? 0.45 : 0.25}
                         stroke={color}
                         strokeWidth={hoveredId === region.id ? 2 : 1.5}
+                        vectorEffect="non-scaling-stroke"
                         style={{ cursor: "pointer" }}
                         onMouseEnter={() => setHoveredId(region.id)}
                         onMouseLeave={() => setHoveredId(null)}
@@ -310,10 +431,11 @@ export default function App() {
                     stroke="#facc15"
                     strokeWidth={1.5}
                     strokeDasharray="4 2"
+                    vectorEffect="non-scaling-stroke"
                   />
                 )}
 
-                {/* Current vertex dots — FIX 3: bounds-based */}
+                {/* Current vertex dots */}
                 {currentPoints.map((pt, i) => {
                   const { x, y } = toXY(pt);
                   return (
@@ -324,6 +446,7 @@ export default function App() {
                       fill={i === 0 ? "#facc15" : "#fde68a"}
                       stroke="#0f0f0f"
                       strokeWidth={1}
+                      vectorEffect="non-scaling-stroke"
                     />
                   );
                 })}
@@ -331,19 +454,66 @@ export default function App() {
             </div>
           )}
 
-          {/* Zoom indicator */}
+          {/* Floating Workspace Toolbar */}
           {images[view] && (
             <div style={{
               position: "absolute",
-              bottom: 12, right: 12,
-              fontSize: 10, color: "#444",
-              letterSpacing: "0.06em",
-              background: "#111",
-              padding: "3px 7px",
-              borderRadius: 3,
-              border: "1px solid #222",
+              bottom: 12,
+              right: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: "rgba(17, 17, 17, 0.85)",
+              backdropFilter: "blur(8px)",
+              border: "1px solid #2a2a2a",
+              padding: "4px 8px",
+              borderRadius: 6,
+              zIndex: 10,
+              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)",
             }}>
-              {Math.round(zoom * 100)}% · scroll to zoom
+              {/* Mode Toggle */}
+              <button
+                onClick={() => setMode(m => m === "draw" ? "pan" : "draw")}
+                style={toolbarBtnStyle(mode === "pan" || isSpacePressed)}
+                title="Toggle Draw / Pan Mode (Spacebar)"
+              >
+                {mode === "pan" || isSpacePressed ? "✋ Pan" : "✏️ Draw"}
+              </button>
+
+              <div style={{ width: 1, height: 16, background: "#2a2a2a", margin: "0 4px" }} />
+
+              {/* Zoom Controls */}
+              <button
+                onClick={() => setZoom(z => Math.max(0.5, z - 0.25))}
+                style={toolbarBtnStyle(false)}
+                title="Zoom Out (Scroll Down)"
+              >
+                -
+              </button>
+              <span style={{ fontSize: 11, minWidth: 42, textAlign: "center", userSelect: "none" }}>
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                onClick={() => setZoom(z => Math.min(4, z + 0.25))}
+                style={toolbarBtnStyle(false)}
+                title="Zoom In (Scroll Up)"
+              >
+                +
+              </button>
+
+              <div style={{ width: 1, height: 16, background: "#2a2a2a", margin: "0 4px" }} />
+
+              {/* Reset View */}
+              <button
+                onClick={() => {
+                  setZoom(1);
+                  setPanOffset({ x: 0, y: 0 });
+                }}
+                style={toolbarBtnStyle(false)}
+                title="Reset Zoom & Pan (Double Click Background)"
+              >
+                ↺
+              </button>
             </div>
           )}
 
@@ -351,13 +521,14 @@ export default function App() {
             <label style={{
               position: "absolute",
               bottom: 12, left: 12,
-              fontSize: 10, color: "#444",
+              fontSize: 10, color: "#888",
               cursor: "pointer",
               background: "#111",
-              padding: "3px 7px",
+              padding: "4px 8px",
               border: "1px solid #222",
-              borderRadius: 3,
+              borderRadius: 4,
               letterSpacing: "0.06em",
+              zIndex: 10,
             }}>
               swap image
               <input type="file" accept="image/*" style={{ display: "none" }}
@@ -374,6 +545,7 @@ export default function App() {
           display: "flex",
           flexDirection: "column",
           fontSize: 12,
+          zIndex: 5,
         }}>
           {/* Draw controls */}
           <div style={{ padding: "16px", borderBottom: "1px solid #1e1e1e" }}>
@@ -438,7 +610,6 @@ export default function App() {
               regionsByView[view].map((region, ri) => {
                 const color = getColor(ri);
                 return (
-                  // FIX 4: key and hover by stable ID
                   <div
                     key={region.id}
                     onMouseEnter={() => setHoveredId(region.id)}
@@ -464,7 +635,7 @@ export default function App() {
                     <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                       <span style={{ fontSize: 10, color: "#444" }}>{region.points.length}pt</span>
                       <button
-                        onClick={() => handleDeleteRegion(region.id)} // FIX 4: pass ID
+                        onClick={() => handleDeleteRegion(region.id)}
                         style={{ background: "none", border: "none", color: "#444", cursor: "pointer", fontSize: 13, padding: "0 2px", lineHeight: 1 }}
                         title="Delete region"
                       >×</button>
@@ -516,5 +687,21 @@ function btnStyle(bg, fg, disabled) {
     letterSpacing: "0.06em",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
+    transition: "background 0.2s, color 0.2s",
+  };
+}
+
+function toolbarBtnStyle(active) {
+  return {
+    background: active ? "rgba(96, 165, 250, 0.15)" : "transparent",
+    color: active ? "#60a5fa" : "#888",
+    border: "none",
+    borderRadius: 4,
+    padding: "4px 8px",
+    fontSize: 11,
+    fontFamily: "inherit",
+    cursor: "pointer",
+    outline: "none",
+    transition: "background 0.2s, color 0.2s",
   };
 }
