@@ -22,19 +22,230 @@ function downloadJSON(data) {
   URL.revokeObjectURL(url);
 }
 
-// ---------------------------------------------------------------------------
-// Coordinate utilities — pure functions, no React deps
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// GEOMETRY LAYER
+// All functions here operate on normalized [0,1] coordinates unless noted.
+// No rounding is applied internally — quantization happens only at export.
+// ===========================================================================
+
+/** Epsilon for near-duplicate detection (in normalized units, ~0.5px at typical res) */
+const EPSILON = 1e-9;
 
 /**
- * Convert a mouse event to normalized [0,1] image coordinates.
- * Uses the transformed BoundingClientRect of imgEl (correct: includes zoom/pan).
- * Returns null if the point is outside the image.
+ * Cross product of 2D vectors (A→B) × (A→C).
+ * Positive = CCW turn, negative = CW turn, zero = collinear.
+ */
+function cross2d(ax, ay, bx, by, cx, cy) {
+  return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+/**
+ * Test whether two segments AB and CD properly intersect.
+ * "Properly" means they share an interior point (not just endpoints).
+ * Returns true if they cross.
+ *
+ * Uses the standard orientation / straddle test.
+ */
+function segmentsProperlyIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const d1 = cross2d(cx, cy, dx, dy, ax, ay);
+  const d2 = cross2d(cx, cy, dx, dy, bx, by);
+  const d3 = cross2d(ax, ay, bx, by, cx, cy);
+  const d4 = cross2d(ax, ay, bx, by, dx, dy);
+
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true;
+  }
+
+  // Collinear / degenerate cases — treat as non-intersecting for our purposes
+  // (we're checking simple polygon invariant, not coincident edges).
+  return false;
+}
+
+/**
+ * Test whether segment P→Q would intersect any existing edge of the polygon
+ * being built, *excluding* the last-to-P edge (adjacent at P) and
+ * the Q-to-first edge (adjacent at Q, only relevant on closure).
+ *
+ * @param {number[][]} pts  - existing polygon points (in order)
+ * @param {number[]}   p    - start of the new segment [x,y]
+ * @param {number[]}   q    - end of the new segment [x,y]
+ * @param {boolean}    isClosing - true when q === pts[0] (closure check)
+ * @returns {{ intersects: boolean, edgeIndex?: number }}
+ */
+function newSegmentIntersectsPolygon(pts, p, q, isClosing) {
+  const n = pts.length;
+  if (n < 2) return { intersects: false };
+
+  const [px, py] = p;
+  const [qx, qy] = q;
+
+  for (let i = 0; i < n - 1; i++) {
+    // Skip the edge immediately before p (shares endpoint p)
+    if (i === n - 2) continue;
+    // On closure, also skip the edge from pts[0] to pts[1] (would share q=pts[0])
+    if (isClosing && i === 0) continue;
+
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[i + 1];
+
+    if (segmentsProperlyIntersect(px, py, qx, qy, ax, ay, bx, by)) {
+      return { intersects: true, edgeIndex: i };
+    }
+  }
+
+  return { intersects: false };
+}
+
+/**
+ * Validate a finalized polygon.
+ *
+ * Checks:
+ *  1. At least 3 distinct points
+ *  2. No consecutive near-duplicate points (within EPSILON)
+ *  3. No self-intersecting edges
+ *
+ * @param {number[][]} pts - resolved, ordered list of [x,y] pairs (open polygon — no repeated first point)
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+function validatePolygon(pts) {
+  if (!pts || pts.length < 3) {
+    return { valid: false, reason: "Polygon requires at least 3 vertices." };
+  }
+
+  const n = pts.length;
+
+  // Check for consecutive duplicates (including wrap-around last→first)
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[(i + 1) % n];
+    if (Math.abs(ax - bx) < EPSILON && Math.abs(ay - by) < EPSILON) {
+      return {
+        valid: false,
+        reason: `Duplicate vertices at index ${i} and ${(i + 1) % n}.`,
+      };
+    }
+  }
+
+  // Check all pairs of non-adjacent edges for proper intersection
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[(i + 1) % n];
+
+    for (let j = i + 2; j < n; j++) {
+      // Skip the pair that shares the endpoint between last and first edge
+      if (i === 0 && j === n - 1) continue;
+
+      const [cx, cy] = pts[j];
+      const [dx, dy] = pts[(j + 1) % n];
+
+      if (segmentsProperlyIntersect(ax, ay, bx, by, cx, cy, dx, dy)) {
+        return {
+          valid: false,
+          reason: `Self-intersection between edge ${i}→${(i+1)%n} and edge ${j}→${(j+1)%n}.`,
+        };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Remove collinear intermediate vertices.
+ * A point B is collinear with its neighbors A and C if |cross(A,B,C)| < EPSILON
+ * (in normalized space — adjust threshold as needed).
+ *
+ * Runs multiple passes until stable (handles chains of collinear points).
+ *
+ * @param {number[][]} pts
+ * @returns {number[][]} simplified polygon
+ */
+function simplifyPolygon(pts) {
+  if (pts.length <= 3) return pts;
+
+  const COLLINEAR_EPSILON = 1e-10;
+  let prev = pts;
+
+  for (let pass = 0; pass < pts.length; pass++) {
+    const next = [];
+    const n = prev.length;
+
+    for (let i = 0; i < n; i++) {
+      const a = prev[(i - 1 + n) % n];
+      const b = prev[i];
+      const c = prev[(i + 1) % n];
+      const c2d = Math.abs(cross2d(a[0], a[1], b[0], b[1], c[0], c[1]));
+      if (c2d > COLLINEAR_EPSILON) {
+        next.push(b);
+      }
+    }
+
+    if (next.length === prev.length) break; // stable
+    if (next.length < 3) return prev;       // don't collapse below minimum
+    prev = next;
+  }
+
+  return prev;
+}
+
+/**
+ * Compute signed area (shoelace formula).
+ * Positive = CCW, Negative = CW.
+ */
+function signedArea(pts) {
+  let area = 0;
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[(i + 1) % n];
+    area += (x1 * y2 - x2 * y1);
+  }
+  return area / 2;
+}
+
+/**
+ * Enforce counter-clockwise winding order.
+ * (Screen-space Y increases downward, so CCW in screen coords = CW mathematically.
+ *  We enforce CCW in screen-space, i.e. positive signed area with Y-down axis.)
+ *
+ * @param {number[][]} pts
+ * @returns {number[][]} pts in CCW screen-space order
+ */
+function enforceWindingCCW(pts) {
+  // In Y-down screen space, shoelace area > 0 means CW mathematical = CCW visual.
+  // We want CCW visual (= positive area), so if area < 0, reverse.
+  return signedArea(pts) < 0 ? [...pts].reverse() : pts;
+}
+
+/**
+ * Check whether a candidate new point is a near-duplicate of the last placed point.
+ * @param {number[][]} pts
+ * @param {number[]}   candidate
+ * @returns {boolean}
+ */
+function isNearDuplicate(pts, candidate) {
+  if (pts.length === 0) return false;
+  const last = pts[pts.length - 1];
+  return (
+    Math.abs(last[0] - candidate[0]) < EPSILON &&
+    Math.abs(last[1] - candidate[1]) < EPSILON
+  );
+}
+
+// ===========================================================================
+// Coordinate utilities — pure functions, no React deps
+// ===========================================================================
+
+/**
+ * Convert a mouse event to full-precision normalized [0,1] image coordinates.
+ * Does NOT apply toFixed — full floating-point precision is retained.
+ * Quantization to 4 decimal places happens only at export.
  */
 function eventToNorm(e, imgEl) {
   const rect = imgEl.getBoundingClientRect();
-  const x = parseFloat(((e.clientX - rect.left) / rect.width).toFixed(4));
-  const y = parseFloat(((e.clientY - rect.top) / rect.height).toFixed(4));
+  const x = (e.clientX - rect.left) / rect.width;
+  const y = (e.clientY - rect.top)  / rect.height;
   if (x < 0 || x > 1 || y < 0 || y > 1) return null;
   return [x, y];
 }
@@ -50,43 +261,50 @@ function normToScreen(normPt, rect) {
   };
 }
 
-/**
- * Pixel distance between two page-space points.
- */
+/** Pixel distance between two page-space points. */
 function screenDist(ax, ay, bx, by) {
   return Math.hypot(ax - bx, ay - by);
 }
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // Snapping resolver
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
-// Snap threshold in screen pixels — constant regardless of zoom.
-// getBoundingClientRect() already returns post-transform coords, so distances
-// computed from it are already in real screen pixels. No zoom scaling needed.
 const SNAP_THRESHOLD_PX = 14;
+
+/**
+ * Project cursor P onto segment A→B, clamped to the segment.
+ * Returns { x, y, t } where t ∈ [0,1].
+ */
+function projectPointOntoSegment(px, py, ax, ay, bx, by) {
+  const abx = bx - ax, aby = by - ay;
+  const lenSq = abx * abx + aby * aby;
+  if (lenSq === 0) return { x: ax, y: ay, t: 0 };
+  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
+  return { x: ax + t * abx, y: ay + t * aby, t };
+}
 
 /**
  * Structured snap resolver.
  *
  * Priority order:
  *   1. First vertex of current polygon (closure) — only when pts.length >= 3
- *   2. Vertices of existing completed regions (shared edges between polygons)
+ *   2. Vertices of existing completed regions
+ *   3. Edges of existing completed regions — stored as structured references,
+ *      NOT flattened to a coordinate here. Coordinates are computed for display
+ *      and for the `displayCoords` field only; the canonical snap result carries
+ *      the structured reference { type:"edge", regionId, edgeIndex, t }.
  *
- * Snapping to the polygon's own non-first vertices is intentionally excluded:
- * it causes false snaps when drawing near recently placed points and
- * interferes with fine placement at high zoom.
- *
- * The threshold is a fixed screen-pixel distance so the snap feel is
- * identical regardless of zoom level. normToScreen uses getBoundingClientRect
- * which already reflects the CSS transform, giving true screen coordinates.
- *
- * @param {number} clientX
- * @param {number} clientY
- * @param {DOMRect} rect    - imgEl.getBoundingClientRect() (post-transform)
- * @param {number[][]} currentPoints
- * @param {object[]} regions - completed regions for current view
- * @returns {{ coords: number[], isFirstPoint: boolean } | null}
+ * Edge-snap result shape:
+ *   {
+ *     coords: [x,y],          ← display/placement coords (full-precision, NO toFixed)
+ *     isFirstPoint: false,
+ *     isEdgeSnap: true,
+ *     regionId: string,
+ *     pointIndex: number,     ← edge index (start vertex)
+ *     edgeT: number,          ← parameter t ∈ (0.01, 0.99)
+ *     snapRef: { type:"edge", regionId, edgeIndex, t }  ← structured ref for storage
+ *   }
  */
 function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
   // --- Tier 1: first vertex (polygon closure) ---
@@ -99,7 +317,7 @@ function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
     }
   }
 
-  // --- Tier 2: vertices of completed regions (shared-edge snapping) ---
+  // --- Tier 2: vertices of completed regions ---
   let best = null;
   let bestDist = SNAP_THRESHOLD_PX;
 
@@ -114,7 +332,74 @@ function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
       }
     }
   }
+  if (best) return best;
+
+  // --- Tier 3: edges of completed regions ---
+  // Returns a structured snap reference; coords are full-precision (no rounding).
+  bestDist = SNAP_THRESHOLD_PX;
+
+  for (const region of regions) {
+    const n = region.points.length;
+    for (let i = 0; i < n; i++) {
+      const a = normToScreen(region.points[i], rect);
+      const b = normToScreen(region.points[(i + 1) % n], rect);
+      const proj = projectPointOntoSegment(clientX, clientY, a.x, a.y, b.x, b.y);
+
+      if (proj.t < 0.01 || proj.t > 0.99) continue;
+
+      const d = screenDist(clientX, clientY, proj.x, proj.y);
+      if (d < bestDist) {
+        bestDist = d;
+        // Full-precision normalized coords — no toFixed
+        const normX = (proj.x - rect.left) / rect.width;
+        const normY = (proj.y - rect.top)  / rect.height;
+        best = {
+          coords: [normX, normY],
+          isFirstPoint: false,
+          isEdgeSnap: true,
+          regionId: region.id,
+          pointIndex: i,
+          edgeT: proj.t,
+          // Structured reference stored alongside coordinates
+          snapRef: { type: "edge", regionId: region.id, edgeIndex: i, t: proj.t },
+        };
+      }
+    }
+  }
   return best;
+}
+
+// ===========================================================================
+// Export helpers
+// ===========================================================================
+
+/**
+ * Resolve an edge-snap reference to a concrete coordinate.
+ * Interpolates between the two vertices of the referenced edge at parameter t.
+ *
+ * @param {Object} ref   - { type:"edge", regionId, edgeIndex, t }
+ * @param {Object} regionMap  - map of id → region
+ * @returns {number[] | null}
+ */
+function resolveEdgeSnapRef(ref, regionMap) {
+  const region = regionMap[ref.regionId];
+  if (!region) return null;
+  const pts = region.points;
+  const n = pts.length;
+  const a = pts[ref.edgeIndex];
+  const b = pts[(ref.edgeIndex + 1) % n];
+  return [
+    a[0] + ref.t * (b[0] - a[0]),
+    a[1] + ref.t * (b[1] - a[1]),
+  ];
+}
+
+/**
+ * Quantize a coordinate to 6 significant decimal places for export.
+ * Internal storage always uses full precision.
+ */
+function quantize(v) {
+  return Math.round(v * 1e6) / 1e6;
 }
 
 export default function App() {
@@ -125,11 +410,12 @@ export default function App() {
   const [currentPoints, setCurrentPoints] = useState([]);
   const [regionName, setRegionName] = useState("");
   const [hoveredId, setHoveredId] = useState(null);
-  
+  const [geoError, setGeoError] = useState(null); // geometry validation error string
+
   // Viewport zoom & pan
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
-  const [mode, setMode] = useState("draw"); // "draw" or "pan"
+  const [mode, setMode] = useState("draw");
   const [isDragging, setIsDragging] = useState(false);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [activeSnap, setActiveSnap] = useState(null);
@@ -138,8 +424,15 @@ export default function App() {
   const imgRef = useRef(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const dragOffsetStartRef = useRef({ x: 0, y: 0 });
-  // Parallel metadata for currentPoints: snapMeta[i] = { regionId, pointIndex } | null
-  // Tracks which points were snapped from existing regions, without polluting exported coords.
+
+  /**
+   * Parallel metadata for currentPoints.
+   * snapMetaRef.current[i] is one of:
+   *   null                                      — free point
+   *   { regionId, pointIndex }                  — vertex snap
+   *   { regionId, isEdgeSnap: true,
+   *     snapRef: { type, regionId, edgeIndex, t } } — edge snap (structured ref)
+   */
   const snapMetaRef = useRef([]);
 
   const handleImageUpload = useCallback((e, targetView) => {
@@ -150,24 +443,18 @@ export default function App() {
     setBounds(prev => ({ ...prev, [targetView]: null }));
   }, []);
 
-  // Set up ResizeObserver to track the unscaled layout bounds of the image.
-  // This handles initial load, window resize, and view switches automatically.
   useEffect(() => {
     if (!imgRef.current) return;
-
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        // contentRect gives the dimensions before CSS scale/translate transforms are applied
         const { width, height } = entry.contentRect;
         setBounds(prev => ({ ...prev, [view]: { width, height } }));
       }
     });
-
     observer.observe(imgRef.current);
     return () => observer.disconnect();
   }, [images, view]);
 
-  // Track Spacebar to toggle pan mode temporarily
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.code === "Space" && document.activeElement.tagName !== "INPUT") {
@@ -175,21 +462,14 @@ export default function App() {
         setIsSpacePressed(true);
       }
     };
-
     const handleKeyUp = (e) => {
-      if (e.code === "Space") {
-        setIsSpacePressed(false);
-      }
+      if (e.code === "Space") setIsSpacePressed(false);
     };
-
-    const handleBlur = () => {
-      setIsSpacePressed(false);
-    };
+    const handleBlur = () => setIsSpacePressed(false);
 
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", handleBlur);
-
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
@@ -197,42 +477,25 @@ export default function App() {
     };
   }, []);
 
-  // Handle canvas mouse down to start panning
   const handleMouseDown = useCallback((e) => {
-    // Always track mouse start position to calculate drag distance correctly in handleCanvasClick
     dragStartRef.current = { x: e.clientX, y: e.clientY };
-
     const isPanActive = mode === "pan" || isSpacePressed || e.button === 1 || e.button === 2;
     if (!isPanActive) return;
-
-    if (e.button === 2) {
-      e.preventDefault();
-    }
-
+    if (e.button === 2) e.preventDefault();
     setIsDragging(true);
     dragOffsetStartRef.current = { ...panOffset };
   }, [mode, isSpacePressed, panOffset]);
 
-  // Handle window mouse move and mouse up when panning is active
   useEffect(() => {
     if (!isDragging) return;
-
     const handleWindowMouseMove = (e) => {
       const dx = e.clientX - dragStartRef.current.x;
       const dy = e.clientY - dragStartRef.current.y;
-      setPanOffset({
-        x: dragOffsetStartRef.current.x + dx,
-        y: dragOffsetStartRef.current.y + dy,
-      });
+      setPanOffset({ x: dragOffsetStartRef.current.x + dx, y: dragOffsetStartRef.current.y + dy });
     };
-
-    const handleWindowMouseUp = () => {
-      setIsDragging(false);
-    };
-
+    const handleWindowMouseUp = () => setIsDragging(false);
     window.addEventListener("mousemove", handleWindowMouseMove);
     window.addEventListener("mouseup", handleWindowMouseUp);
-
     return () => {
       window.removeEventListener("mousemove", handleWindowMouseMove);
       window.removeEventListener("mouseup", handleWindowMouseUp);
@@ -240,7 +503,7 @@ export default function App() {
   }, [isDragging]);
 
   // ---------------------------------------------------------------------------
-  // Snap helper — thin wrapper around the module-level resolveSnap
+  // Snap helper
   // ---------------------------------------------------------------------------
   const getSnappedPoint = useCallback((clientX, clientY) => {
     if (!imgRef.current) return null;
@@ -249,24 +512,75 @@ export default function App() {
   }, [currentPoints, regionsByView, view]);
 
   // ---------------------------------------------------------------------------
-  // handleFinishRegion — declared BEFORE handleCanvasClick so it can be
-  // referenced in handleCanvasClick's dependency array without a TDZ error.
+  // Geometry validation for point placement (live, per-click)
+  // Checks whether adding the new segment (last point → candidate) would
+  // create a self-intersection with existing edges of the in-progress polygon.
+  // ---------------------------------------------------------------------------
+  const wouldCreateIntersection = useCallback((candidate) => {
+    if (currentPoints.length < 2) return false;
+    const result = newSegmentIntersectsPolygon(
+      currentPoints,
+      currentPoints[currentPoints.length - 1],
+      candidate,
+      false
+    );
+    return result.intersects;
+  }, [currentPoints]);
+
+  /**
+   * Check whether closing the polygon (connecting last point → first point)
+   * would create a self-intersection.
+   */
+  const wouldClosingIntersect = useCallback(() => {
+    if (currentPoints.length < 3) return false;
+    const result = newSegmentIntersectsPolygon(
+      currentPoints,
+      currentPoints[currentPoints.length - 1],
+      currentPoints[0],
+      true
+    );
+    return result.intersects;
+  }, [currentPoints]);
+
+  // ---------------------------------------------------------------------------
+  // handleFinishRegion
   // ---------------------------------------------------------------------------
   const handleFinishRegion = useCallback(() => {
     if (currentPoints.length < 3) return;
+
+    // 1. Check closing segment doesn't intersect existing edges
+    if (wouldClosingIntersect()) {
+      setGeoError("Cannot close: closing segment intersects existing edges. Undo the last point(s) and try again.");
+      return;
+    }
+
+    // 2. Simplify collinear points
+    const simplified = simplifyPolygon(currentPoints);
+
+    // 3. Full validation of the finalized polygon
+    const validation = validatePolygon(simplified);
+    if (!validation.valid) {
+      setGeoError(`Invalid polygon: ${validation.reason} Please undo and correct.`);
+      return;
+    }
+
+    // 4. Enforce consistent winding (CCW in screen-space)
+    const wound = enforceWindingCCW(simplified);
+
     const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
     const region = {
       id: crypto.randomUUID(),
       name,
       view,
-      points: currentPoints,
+      points: wound,
     };
     setRegionsByView(prev => ({ ...prev, [view]: [...prev[view], region] }));
     setCurrentPoints([]);
     setRegionName("");
     setActiveSnap(null);
+    setGeoError(null);
     snapMetaRef.current = [];
-  }, [currentPoints, regionName, view, regionsByView]);
+  }, [currentPoints, regionName, view, regionsByView, wouldClosingIntersect]);
 
   // ---------------------------------------------------------------------------
   // Canvas interaction handlers
@@ -286,64 +600,95 @@ export default function App() {
     if (mode === "pan" || isSpacePressed) return;
     if (!images[view] || !imgRef.current) return;
 
-    // Suppress clicks that were drags
     const dx = Math.abs(e.clientX - dragStartRef.current.x);
     const dy = Math.abs(e.clientY - dragStartRef.current.y);
     if (dx > 3 || dy > 3) return;
 
     const snap = activeSnap ?? getSnappedPoint(e.clientX, e.clientY);
 
+    // --- Closure via first-point snap ---
     if (snap?.isFirstPoint) {
       handleFinishRegion();
       setActiveSnap(null);
       return;
     }
 
+    // Determine the candidate coordinate to be placed
+    let candidate;
+    let meta = null;
+
     if (snap) {
-      const meta = snap.regionId ? { regionId: snap.regionId, pointIndex: snap.pointIndex } : null;
-      const firstMeta = snapMetaRef.current[0];
-
-      // Shared-edge auto-close: the new snap point is from the same region as
-      // the first point, we have at least 1 free point in between (so the
-      // polygon has 3+ vertices including the two shared ones), and the two
-      // shared points are not the same vertex (which would be a degenerate loop).
-      const isSharedEdgeClose =
-        meta &&
-        firstMeta &&
-        meta.regionId === firstMeta.regionId &&
-        meta.pointIndex !== firstMeta.pointIndex &&
-        currentPoints.length >= 1; // at least 1 point already placed
-
-      if (isSharedEdgeClose) {
-        const closed = [...currentPoints, snap.coords];
-        if (closed.length >= 3) {
-          const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
-          const region = { id: crypto.randomUUID(), name, view, points: closed };
-          setRegionsByView(p => ({ ...p, [view]: [...p[view], region] }));
-          setCurrentPoints([]);
-          setRegionName("");
-          setActiveSnap(null);
-          snapMetaRef.current = [];
-        } else {
-          // Not enough points yet — just append (shouldn't normally happen)
-          snapMetaRef.current = [...snapMetaRef.current, meta];
-          setCurrentPoints(closed);
-        }
-        return;
+      candidate = snap.coords;
+      if (snap.regionId) {
+        meta = snap.isEdgeSnap
+          ? { regionId: snap.regionId, isEdgeSnap: true, snapRef: snap.snapRef }
+          : { regionId: snap.regionId, pointIndex: snap.pointIndex, isEdgeSnap: false };
       }
+    } else {
+      candidate = eventToNorm(e, imgRef.current);
+      if (!candidate) return;
+    }
 
-      // Normal snap: add the point and record its metadata
-      snapMetaRef.current = [...snapMetaRef.current, meta];
-      setCurrentPoints(prev => [...prev, snap.coords]);
+    // --- Vertex hygiene: reject near-duplicate of last point ---
+    if (isNearDuplicate(currentPoints, candidate)) {
+      setGeoError("Duplicate point: too close to the previous vertex.");
       return;
     }
 
-    // Free placement — no snap
-    snapMetaRef.current = [...snapMetaRef.current, null];
-    const pt = eventToNorm(e, imgRef.current);
-    if (!pt) return;
-    setCurrentPoints(prev => [...prev, pt]);
-  }, [images, view, mode, isSpacePressed, activeSnap, currentPoints, regionName, regionsByView, getSnappedPoint, handleFinishRegion]);
+    // --- Self-intersection guard: reject if new segment would cross existing edges ---
+    if (wouldCreateIntersection(candidate)) {
+      setGeoError("Cannot place point: the new segment would create a self-intersection.");
+      return;
+    }
+
+    // Clear any previous error
+    setGeoError(null);
+
+    // --- Shared-edge auto-close ---
+    const firstMeta = snapMetaRef.current[0];
+    const isSharedEdgeClose =
+      meta &&
+      firstMeta &&
+      !meta.isEdgeSnap &&
+      !firstMeta?.isEdgeSnap &&
+      meta.regionId === firstMeta?.regionId &&
+      meta.pointIndex !== firstMeta?.pointIndex &&
+      currentPoints.length >= 1;
+
+    if (isSharedEdgeClose) {
+      const closed = [...currentPoints, candidate];
+      if (closed.length >= 3) {
+        // Validate before committing
+        const simplified = simplifyPolygon(closed);
+        const validation = validatePolygon(simplified);
+        if (!validation.valid) {
+          setGeoError(`Invalid polygon on auto-close: ${validation.reason}`);
+          return;
+        }
+        const wound = enforceWindingCCW(simplified);
+        const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
+        const region = { id: crypto.randomUUID(), name, view, points: wound };
+        setRegionsByView(p => ({ ...p, [view]: [...p[view], region] }));
+        setCurrentPoints([]);
+        setRegionName("");
+        setActiveSnap(null);
+        setGeoError(null);
+        snapMetaRef.current = [];
+      } else {
+        snapMetaRef.current = [...snapMetaRef.current, meta];
+        setCurrentPoints(closed);
+      }
+      return;
+    }
+
+    // --- Normal placement ---
+    snapMetaRef.current = [...snapMetaRef.current, meta];
+    setCurrentPoints(prev => [...prev, candidate]);
+  }, [
+    images, view, mode, isSpacePressed, activeSnap, currentPoints,
+    regionName, regionsByView, getSnappedPoint, handleFinishRegion,
+    wouldCreateIntersection,
+  ]);
 
   const handleDoubleClick = useCallback((e) => {
     if (e.target === containerRef.current || e.target === imgRef.current) {
@@ -360,6 +705,7 @@ export default function App() {
   const handleUndoPoint = useCallback(() => {
     snapMetaRef.current = snapMetaRef.current.slice(0, -1);
     setCurrentPoints(prev => prev.slice(0, -1));
+    setGeoError(null);
   }, []);
 
   const handleDeleteRegion = useCallback((id) => {
@@ -369,21 +715,70 @@ export default function App() {
     }));
   }, [view]);
 
+  // ---------------------------------------------------------------------------
+  // Export
+  // Resolves all edge-snap structured references to concrete coordinates,
+  // re-validates every polygon, enforces winding, and quantizes at 6dp.
+  // ---------------------------------------------------------------------------
   const handleExport = useCallback(() => {
+    const regionMap = {};
+    for (const v of VIEWS) {
+      for (const r of regionsByView[v]) {
+        regionMap[r.id] = r;
+      }
+    }
+
     const output = {};
+    const errors = [];
+
     for (const v of VIEWS) {
       for (const region of regionsByView[v]) {
         const key = `${v}_${region.name}`;
-        output[key] = { view: region.view, points: region.points };
+
+        // Resolve any edge-snap structural references in the stored points.
+        // (In the current flow, points stored in completed regions are already
+        // resolved coordinates; this guard handles future structured-ref storage.)
+        const resolvedPoints = region.points.map((pt) => {
+          if (pt && pt.__snapRef) {
+            const resolved = resolveEdgeSnapRef(pt.__snapRef, regionMap);
+            return resolved || pt;
+          }
+          return pt;
+        });
+
+        // Re-validate before export
+        const validation = validatePolygon(resolvedPoints);
+        if (!validation.valid) {
+          errors.push(`${key}: ${validation.reason}`);
+          continue;
+        }
+
+        // Enforce winding, simplify, then quantize
+        const simplified = simplifyPolygon(resolvedPoints);
+        const wound = enforceWindingCCW(simplified);
+        const quantized = wound.map(([x, y]) => [quantize(x), quantize(y)]);
+
+        output[key] = {
+          view: region.view,
+          winding: "ccw",
+          pointCount: quantized.length,
+          points: quantized,
+        };
       }
     }
+
+    if (errors.length > 0) {
+      alert(
+        `Export blocked — invalid polygon(s) detected:\n\n${errors.join("\n")}\n\nPlease delete and redraw the affected regions.`
+      );
+      return;
+    }
+
     downloadJSON(output);
   }, [regionsByView]);
 
   const totalRegions = VIEWS.reduce((acc, v) => acc + regionsByView[v].length, 0);
 
-  // Multiplicative wheel zoom: each scroll tick multiplies by a fixed factor,
-  // so the zoom step feels proportionally equal whether at 50% or 800%.
   const handleWheel = useCallback((e) => {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
@@ -409,6 +804,9 @@ export default function App() {
     return { x: pt[0] * b.width, y: pt[1] * b.height };
   }, [bounds, view]);
 
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
   return (
     <div style={{
       width: "100%",
@@ -449,13 +847,14 @@ export default function App() {
       {/* View tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a", background: "#111", zIndex: 5 }}>
         {VIEWS.map(v => (
-          <button key={v} onClick={() => { 
-            setView(v); 
-            setCurrentPoints([]); 
+          <button key={v} onClick={() => {
+            setView(v);
+            setCurrentPoints([]);
             snapMetaRef.current = [];
             setZoom(1);
             setPanOffset({ x: 0, y: 0 });
             setActiveSnap(null);
+            setGeoError(null);
           }} style={{
             padding: "8px 20px",
             background: view === v ? "#1a1a1a" : "transparent",
@@ -483,17 +882,17 @@ export default function App() {
       {/* Main Container */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {/* Canvas */}
-        <div 
-          ref={containerRef} 
+        <div
+          ref={containerRef}
           style={{
             flex: 1,
             position: "relative",
             overflow: "hidden",
             background: "#0a0a0a",
-            cursor: !images[view] 
-              ? "default" 
-              : (mode === "pan" || isSpacePressed) 
-                ? (isDragging ? "grabbing" : "grab") 
+            cursor: !images[view]
+              ? "default"
+              : (mode === "pan" || isSpacePressed)
+                ? (isDragging ? "grabbing" : "grab")
                 : "crosshair",
             display: "flex",
             alignItems: "center",
@@ -549,7 +948,7 @@ export default function App() {
                   pointerEvents: "none",
                 }}
               />
-              {/* SVG overlay — sized to match img exactly */}
+              {/* SVG overlay */}
               <svg
                 style={{
                   position: "absolute",
@@ -606,8 +1005,7 @@ export default function App() {
                   />
                 )}
 
-                {/* Current vertex dots — radius and stroke divided by zoom so
-                    they stay a constant screen size regardless of zoom level */}
+                {/* Current vertex dots */}
                 {currentPoints.map((pt, i) => {
                   const { x, y } = toXY(pt);
                   const r = (i === 0 ? 4 : 2.5) / zoom;
@@ -625,18 +1023,51 @@ export default function App() {
                   );
                 })}
 
-                {/* Snapping indicator — sizes divided by zoom for screen-invariant appearance */}
+                {/* Snapping indicator */}
                 {activeSnap && (() => {
                   const { x, y } = toXY(activeSnap.coords);
-                  const r = (activeSnap.isFirstPoint ? 7 : 5) / zoom;
                   const sw = 1.5 / zoom;
                   const fontSize = 9 / zoom;
                   const labelOffset = 10 / zoom;
+
+                  if (activeSnap.isEdgeSnap) {
+                    const b = bounds[view];
+                    if (!b) return null;
+                    const n = regionsByView[view].find(r => r.id === activeSnap.regionId);
+                    if (!n) return null;
+                    const pts = n.points;
+                    const ai = activeSnap.pointIndex;
+                    const bi = (ai + 1) % pts.length;
+                    const ex = pts[bi][0] * b.width  - pts[ai][0] * b.width;
+                    const ey = pts[bi][1] * b.height - pts[ai][1] * b.height;
+                    const elen = Math.hypot(ex, ey) || 1;
+                    const px = -ey / elen, py = ex / elen;
+                    const tickLen = 6 / zoom;
+                    return (
+                      <g style={{ pointerEvents: "none" }}>
+                        <line
+                          x1={pts[ai][0] * b.width}  y1={pts[ai][1] * b.height}
+                          x2={pts[bi][0] * b.width}  y2={pts[bi][1] * b.height}
+                          stroke="#a78bfa" strokeWidth={2 / zoom}
+                          strokeLinecap="round" vectorEffect="non-scaling-stroke"
+                        />
+                        <line
+                          x1={x - px * tickLen} y1={y - py * tickLen}
+                          x2={x + px * tickLen} y2={y + py * tickLen}
+                          stroke="#a78bfa" strokeWidth={sw}
+                          strokeLinecap="round" vectorEffect="non-scaling-stroke"
+                        />
+                        <circle cx={x} cy={y} r={2.5 / zoom}
+                          fill="#a78bfa" vectorEffect="non-scaling-stroke" />
+                      </g>
+                    );
+                  }
+
+                  const r = (activeSnap.isFirstPoint ? 7 : 5) / zoom;
                   return (
                     <g>
                       <circle
-                        cx={x} cy={y}
-                        r={r}
+                        cx={x} cy={y} r={r}
                         fill={activeSnap.isFirstPoint ? "rgba(74, 222, 128, 0.2)" : "rgba(250, 204, 21, 0.15)"}
                         stroke={activeSnap.isFirstPoint ? "#4ade80" : "#facc15"}
                         strokeWidth={sw}
@@ -646,8 +1077,7 @@ export default function App() {
                       {activeSnap.isFirstPoint && (
                         <text
                           x={x + labelOffset} y={y + fontSize * 0.4}
-                          fill="#4ade80"
-                          fontSize={fontSize}
+                          fill="#4ade80" fontSize={fontSize}
                           fontFamily="IBM Plex Mono, monospace"
                           style={{ pointerEvents: "none", userSelect: "none", fontWeight: "bold" }}
                         >
@@ -658,6 +1088,46 @@ export default function App() {
                   );
                 })()}
               </svg>
+            </div>
+          )}
+
+          {/* Geometry error banner — visible, non-modal, dismissable */}
+          {geoError && (
+            <div style={{
+              position: "absolute",
+              top: 12,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "#1a0808",
+              border: "1px solid #7f1d1d",
+              color: "#fca5a5",
+              padding: "8px 14px",
+              borderRadius: 4,
+              fontSize: 11,
+              fontFamily: "IBM Plex Mono, monospace",
+              letterSpacing: "0.04em",
+              zIndex: 20,
+              maxWidth: "calc(100% - 48px)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+            }}>
+              <span style={{ flexShrink: 0, opacity: 0.7 }}>⚠</span>
+              <span style={{ flex: 1 }}>{geoError}</span>
+              <button
+                onClick={() => setGeoError(null)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#f87171",
+                  cursor: "pointer",
+                  fontSize: 14,
+                  padding: "0 2px",
+                  lineHeight: 1,
+                  flexShrink: 0,
+                }}
+              >×</button>
             </div>
           )}
 
@@ -678,7 +1148,6 @@ export default function App() {
               zIndex: 10,
               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)",
             }}>
-              {/* Mode Toggle */}
               <button
                 onClick={() => setMode(m => m === "draw" ? "pan" : "draw")}
                 style={toolbarBtnStyle(mode === "pan" || isSpacePressed)}
@@ -689,14 +1158,11 @@ export default function App() {
 
               <div style={{ width: 1, height: 16, background: "#2a2a2a", margin: "0 4px" }} />
 
-              {/* Zoom Controls */}
               <button
                 onClick={() => setZoom(z => Math.max(0.5, z / 1.25))}
                 style={toolbarBtnStyle(false)}
                 title="Zoom Out (Scroll Down)"
-              >
-                -
-              </button>
+              >-</button>
               <span style={{ fontSize: 11, minWidth: 42, textAlign: "center", userSelect: "none" }}>
                 {Math.round(zoom * 100)}%
               </span>
@@ -704,23 +1170,15 @@ export default function App() {
                 onClick={() => setZoom(z => Math.min(8, z * 1.25))}
                 style={toolbarBtnStyle(false)}
                 title="Zoom In (Scroll Up)"
-              >
-                +
-              </button>
+              >+</button>
 
               <div style={{ width: 1, height: 16, background: "#2a2a2a", margin: "0 4px" }} />
 
-              {/* Reset View */}
               <button
-                onClick={() => {
-                  setZoom(1);
-                  setPanOffset({ x: 0, y: 0 });
-                }}
+                onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
                 style={toolbarBtnStyle(false)}
                 title="Reset Zoom & Pan (Double Click Background)"
-              >
-                ↺
-              </button>
+              >↺</button>
             </div>
           )}
 
@@ -796,7 +1254,7 @@ export default function App() {
             </div>
             {currentPoints.length > 0 && (
               <button
-                onClick={() => { snapMetaRef.current = []; setCurrentPoints([]); }}
+                onClick={() => { snapMetaRef.current = []; setCurrentPoints([]); setGeoError(null); }}
                 style={{ ...btnStyle("#1a1a1a", "#555", false), width: "100%", fontSize: 11 }}
               >
                 Discard
