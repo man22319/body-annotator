@@ -24,175 +24,122 @@ function downloadJSON(data) {
 
 // ===========================================================================
 // GEOMETRY LAYER
-// All functions here operate on normalized [0,1] coordinates unless noted.
-// No rounding is applied internally — quantization happens only at export.
+// All functions operate on normalized [0,1] coordinates.
+// No rounding applied internally — quantization only at export.
 // ===========================================================================
 
-/** Epsilon for near-duplicate detection (in normalized units, ~0.5px at typical res) */
 const EPSILON = 1e-9;
 
-/**
- * Cross product of 2D vectors (A→B) × (A→C).
- * Positive = CCW turn, negative = CW turn, zero = collinear.
- */
 function cross2d(ax, ay, bx, by, cx, cy) {
   return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 }
 
-/**
- * Test whether two segments AB and CD properly intersect.
- * "Properly" means they share an interior point (not just endpoints).
- * Returns true if they cross.
- *
- * Uses the standard orientation / straddle test.
- */
 function segmentsProperlyIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
   const d1 = cross2d(cx, cy, dx, dy, ax, ay);
   const d2 = cross2d(cx, cy, dx, dy, bx, by);
   const d3 = cross2d(ax, ay, bx, by, cx, cy);
   const d4 = cross2d(ax, ay, bx, by, dx, dy);
-
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
-    return true;
-  }
-
-  // Collinear / degenerate cases — treat as non-intersecting for our purposes
-  // (we're checking simple polygon invariant, not coincident edges).
-  return false;
+  return (
+    ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+  );
 }
 
 /**
  * Test whether segment P→Q would intersect any existing edge of the polygon
- * being built, *excluding* the last-to-P edge (adjacent at P) and
- * the Q-to-first edge (adjacent at Q, only relevant on closure).
+ * being built, excluding adjacent edges at P and (optionally) at Q.
  *
- * @param {number[][]} pts  - existing polygon points (in order)
- * @param {number[]}   p    - start of the new segment [x,y]
- * @param {number[]}   q    - end of the new segment [x,y]
+ * @param {number[][]} pts       - existing polygon points in order
+ * @param {number[]}   p         - start of new segment [x,y]
+ * @param {number[]}   q         - end of new segment [x,y]
  * @param {boolean}    isClosing - true when q === pts[0] (closure check)
  * @returns {{ intersects: boolean, edgeIndex?: number }}
  */
 function newSegmentIntersectsPolygon(pts, p, q, isClosing) {
   const n = pts.length;
   if (n < 2) return { intersects: false };
-
   const [px, py] = p;
   const [qx, qy] = q;
-
   for (let i = 0; i < n - 1; i++) {
-    // Skip the edge immediately before p (shares endpoint p)
-    if (i === n - 2) continue;
-    // On closure, also skip the edge from pts[0] to pts[1] (would share q=pts[0])
-    if (isClosing && i === 0) continue;
-
+    if (i === n - 2) continue;           // skip edge ending at p
+    if (isClosing && i === 0) continue;  // skip edge starting at q=pts[0]
     const [ax, ay] = pts[i];
     const [bx, by] = pts[i + 1];
-
     if (segmentsProperlyIntersect(px, py, qx, qy, ax, ay, bx, by)) {
       return { intersects: true, edgeIndex: i };
     }
   }
-
   return { intersects: false };
 }
 
 /**
- * Validate a finalized polygon.
+ * After adding `candidate` to `pts`, would the polygon be impossible to close
+ * without self-intersection? Checks whether ANY future closing segment
+ * (candidate → pts[0]) would cross existing edges.
  *
- * Checks:
- *  1. At least 3 distinct points
- *  2. No consecutive near-duplicate points (within EPSILON)
- *  3. No self-intersecting edges
- *
- * @param {number[][]} pts - resolved, ordered list of [x,y] pairs (open polygon — no repeated first point)
- * @returns {{ valid: boolean, reason?: string }}
+ * This gives live feedback that a point placement will strand the user.
  */
+function wouldMakeUncloseable(pts, candidate) {
+  if (pts.length < 2) return false;
+  const hypothetical = [...pts, candidate];
+  const result = newSegmentIntersectsPolygon(
+    hypothetical,
+    hypothetical[hypothetical.length - 1],
+    hypothetical[0],
+    true,
+  );
+  return result.intersects;
+}
+
 function validatePolygon(pts) {
   if (!pts || pts.length < 3) {
     return { valid: false, reason: "Polygon requires at least 3 vertices." };
   }
-
   const n = pts.length;
-
-  // Check for consecutive duplicates (including wrap-around last→first)
   for (let i = 0; i < n; i++) {
     const [ax, ay] = pts[i];
     const [bx, by] = pts[(i + 1) % n];
     if (Math.abs(ax - bx) < EPSILON && Math.abs(ay - by) < EPSILON) {
-      return {
-        valid: false,
-        reason: `Duplicate vertices at index ${i} and ${(i + 1) % n}.`,
-      };
+      return { valid: false, reason: `Duplicate vertices at index ${i} and ${(i + 1) % n}.` };
     }
   }
-
-  // Check all pairs of non-adjacent edges for proper intersection
   for (let i = 0; i < n; i++) {
     const [ax, ay] = pts[i];
     const [bx, by] = pts[(i + 1) % n];
-
     for (let j = i + 2; j < n; j++) {
-      // Skip the pair that shares the endpoint between last and first edge
       if (i === 0 && j === n - 1) continue;
-
       const [cx, cy] = pts[j];
       const [dx, dy] = pts[(j + 1) % n];
-
       if (segmentsProperlyIntersect(ax, ay, bx, by, cx, cy, dx, dy)) {
-        return {
-          valid: false,
-          reason: `Self-intersection between edge ${i}→${(i+1)%n} and edge ${j}→${(j+1)%n}.`,
-        };
+        return { valid: false, reason: `Self-intersection between edge ${i}→${(i+1)%n} and edge ${j}→${(j+1)%n}.` };
       }
     }
   }
-
   return { valid: true };
 }
 
-/**
- * Remove collinear intermediate vertices.
- * A point B is collinear with its neighbors A and C if |cross(A,B,C)| < EPSILON
- * (in normalized space — adjust threshold as needed).
- *
- * Runs multiple passes until stable (handles chains of collinear points).
- *
- * @param {number[][]} pts
- * @returns {number[][]} simplified polygon
- */
 function simplifyPolygon(pts) {
   if (pts.length <= 3) return pts;
-
   const COLLINEAR_EPSILON = 1e-10;
   let prev = pts;
-
   for (let pass = 0; pass < pts.length; pass++) {
     const next = [];
     const n = prev.length;
-
     for (let i = 0; i < n; i++) {
       const a = prev[(i - 1 + n) % n];
       const b = prev[i];
       const c = prev[(i + 1) % n];
-      const c2d = Math.abs(cross2d(a[0], a[1], b[0], b[1], c[0], c[1]));
-      if (c2d > COLLINEAR_EPSILON) {
+      if (Math.abs(cross2d(a[0], a[1], b[0], b[1], c[0], c[1])) > COLLINEAR_EPSILON) {
         next.push(b);
       }
     }
-
-    if (next.length === prev.length) break; // stable
-    if (next.length < 3) return prev;       // don't collapse below minimum
+    if (next.length === prev.length) break;
+    if (next.length < 3) return prev;
     prev = next;
   }
-
   return prev;
 }
 
-/**
- * Compute signed area (shoelace formula).
- * Positive = CCW, Negative = CW.
- */
 function signedArea(pts) {
   let area = 0;
   const n = pts.length;
@@ -204,44 +151,20 @@ function signedArea(pts) {
   return area / 2;
 }
 
-/**
- * Enforce counter-clockwise winding order.
- * (Screen-space Y increases downward, so CCW in screen coords = CW mathematically.
- *  We enforce CCW in screen-space, i.e. positive signed area with Y-down axis.)
- *
- * @param {number[][]} pts
- * @returns {number[][]} pts in CCW screen-space order
- */
 function enforceWindingCCW(pts) {
-  // In Y-down screen space, shoelace area > 0 means CW mathematical = CCW visual.
-  // We want CCW visual (= positive area), so if area < 0, reverse.
   return signedArea(pts) < 0 ? [...pts].reverse() : pts;
 }
 
-/**
- * Check whether a candidate new point is a near-duplicate of the last placed point.
- * @param {number[][]} pts
- * @param {number[]}   candidate
- * @returns {boolean}
- */
 function isNearDuplicate(pts, candidate) {
   if (pts.length === 0) return false;
   const last = pts[pts.length - 1];
-  return (
-    Math.abs(last[0] - candidate[0]) < EPSILON &&
-    Math.abs(last[1] - candidate[1]) < EPSILON
-  );
+  return Math.abs(last[0] - candidate[0]) < EPSILON && Math.abs(last[1] - candidate[1]) < EPSILON;
 }
 
 // ===========================================================================
-// Coordinate utilities — pure functions, no React deps
+// Coordinate utilities
 // ===========================================================================
 
-/**
- * Convert a mouse event to full-precision normalized [0,1] image coordinates.
- * Does NOT apply toFixed — full floating-point precision is retained.
- * Quantization to 4 decimal places happens only at export.
- */
 function eventToNorm(e, imgEl) {
   const rect = imgEl.getBoundingClientRect();
   const x = (e.clientX - rect.left) / rect.width;
@@ -250,10 +173,6 @@ function eventToNorm(e, imgEl) {
   return [x, y];
 }
 
-/**
- * Convert a normalized point to page-space pixel coordinates,
- * using the live BoundingClientRect (post-transform).
- */
 function normToScreen(normPt, rect) {
   return {
     x: rect.left + normPt[0] * rect.width,
@@ -261,7 +180,6 @@ function normToScreen(normPt, rect) {
   };
 }
 
-/** Pixel distance between two page-space points. */
 function screenDist(ax, ay, bx, by) {
   return Math.hypot(ax - bx, ay - by);
 }
@@ -272,10 +190,6 @@ function screenDist(ax, ay, bx, by) {
 
 const SNAP_THRESHOLD_PX = 14;
 
-/**
- * Project cursor P onto segment A→B, clamped to the segment.
- * Returns { x, y, t } where t ∈ [0,1].
- */
 function projectPointOntoSegment(px, py, ax, ay, bx, by) {
   const abx = bx - ax, aby = by - ay;
   const lenSq = abx * abx + aby * aby;
@@ -284,43 +198,19 @@ function projectPointOntoSegment(px, py, ax, ay, bx, by) {
   return { x: ax + t * abx, y: ay + t * aby, t };
 }
 
-/**
- * Structured snap resolver.
- *
- * Priority order:
- *   1. First vertex of current polygon (closure) — only when pts.length >= 3
- *   2. Vertices of existing completed regions
- *   3. Edges of existing completed regions — stored as structured references,
- *      NOT flattened to a coordinate here. Coordinates are computed for display
- *      and for the `displayCoords` field only; the canonical snap result carries
- *      the structured reference { type:"edge", regionId, edgeIndex, t }.
- *
- * Edge-snap result shape:
- *   {
- *     coords: [x,y],          ← display/placement coords (full-precision, NO toFixed)
- *     isFirstPoint: false,
- *     isEdgeSnap: true,
- *     regionId: string,
- *     pointIndex: number,     ← edge index (start vertex)
- *     edgeT: number,          ← parameter t ∈ (0.01, 0.99)
- *     snapRef: { type:"edge", regionId, edgeIndex, t }  ← structured ref for storage
- *   }
- */
 function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
-  // --- Tier 1: first vertex (polygon closure) ---
+  // Tier 1: first vertex (closure)
   if (currentPoints.length >= 3) {
     const first = currentPoints[0];
     const s = normToScreen(first, rect);
-    const d = screenDist(clientX, clientY, s.x, s.y);
-    if (d < SNAP_THRESHOLD_PX) {
+    if (screenDist(clientX, clientY, s.x, s.y) < SNAP_THRESHOLD_PX) {
       return { coords: first, isFirstPoint: true };
     }
   }
 
-  // --- Tier 2: vertices of completed regions ---
+  // Tier 2: vertices of completed regions
   let best = null;
   let bestDist = SNAP_THRESHOLD_PX;
-
   for (const region of regions) {
     for (let i = 0; i < region.points.length; i++) {
       const pt = region.points[i];
@@ -334,23 +224,18 @@ function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
   }
   if (best) return best;
 
-  // --- Tier 3: edges of completed regions ---
-  // Returns a structured snap reference; coords are full-precision (no rounding).
+  // Tier 3: edges of completed regions
   bestDist = SNAP_THRESHOLD_PX;
-
   for (const region of regions) {
     const n = region.points.length;
     for (let i = 0; i < n; i++) {
       const a = normToScreen(region.points[i], rect);
       const b = normToScreen(region.points[(i + 1) % n], rect);
       const proj = projectPointOntoSegment(clientX, clientY, a.x, a.y, b.x, b.y);
-
       if (proj.t < 0.01 || proj.t > 0.99) continue;
-
       const d = screenDist(clientX, clientY, proj.x, proj.y);
       if (d < bestDist) {
         bestDist = d;
-        // Full-precision normalized coords — no toFixed
         const normX = (proj.x - rect.left) / rect.width;
         const normY = (proj.y - rect.top)  / rect.height;
         best = {
@@ -360,8 +245,6 @@ function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
           regionId: region.id,
           pointIndex: i,
           edgeT: proj.t,
-          // Structured reference stored alongside coordinates
-          snapRef: { type: "edge", regionId: region.id, edgeIndex: i, t: proj.t },
         };
       }
     }
@@ -373,68 +256,69 @@ function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
 // Export helpers
 // ===========================================================================
 
-/**
- * Resolve an edge-snap reference to a concrete coordinate.
- * Interpolates between the two vertices of the referenced edge at parameter t.
- *
- * @param {Object} ref   - { type:"edge", regionId, edgeIndex, t }
- * @param {Object} regionMap  - map of id → region
- * @returns {number[] | null}
- */
-function resolveEdgeSnapRef(ref, regionMap) {
-  const region = regionMap[ref.regionId];
-  if (!region) return null;
-  const pts = region.points;
-  const n = pts.length;
-  const a = pts[ref.edgeIndex];
-  const b = pts[(ref.edgeIndex + 1) % n];
-  return [
-    a[0] + ref.t * (b[0] - a[0]),
-    a[1] + ref.t * (b[1] - a[1]),
-  ];
-}
-
-/**
- * Quantize a coordinate to 6 significant decimal places for export.
- * Internal storage always uses full precision.
- */
 function quantize(v) {
   return Math.round(v * 1e6) / 1e6;
 }
+
+// ===========================================================================
+// Vertex + meta — unified record kept in a single ref array.
+// This eliminates the parallel-array fragility: currentStroke.current[i]
+// is always { pt: [x,y], meta: null | { regionId, pointIndex?, isEdgeSnap? } }.
+// React state (currentPoints) is derived from this ref for rendering.
+// ===========================================================================
+
+/**
+ * @typedef {{ pt: number[], meta: null | { regionId: string, pointIndex?: number, isEdgeSnap?: boolean } }} StrokeEntry
+ */
 
 export default function App() {
   const [view, setView] = useState("front");
   const [images, setImages] = useState({ front: null, back: null, side: null });
   const [bounds, setBounds] = useState({ front: null, back: null, side: null });
   const [regionsByView, setRegionsByView] = useState({ front: [], back: [], side: [] });
+
+  // currentPoints is React state derived from currentStroke ref — used only for rendering.
+  // Mutations go through currentStroke.current, then flush via setCurrentPoints.
   const [currentPoints, setCurrentPoints] = useState([]);
+  /** @type {React.MutableRefObject<StrokeEntry[]>} */
+  const currentStroke = useRef([]);
+
   const [regionName, setRegionName] = useState("");
   const [hoveredId, setHoveredId] = useState(null);
-  const [geoError, setGeoError] = useState(null); // geometry validation error string
+  const [geoError, setGeoError] = useState(null);
+  const [warningMsg, setWarningMsg] = useState(null); // non-blocking predictive warning
 
-  // Viewport zoom & pan
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [mode, setMode] = useState("draw");
   const [isDragging, setIsDragging] = useState(false);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
-  const [activeSnap, setActiveSnap] = useState(null);
+
+  // FIX 1: activeSnap is kept in a ref (updated synchronously on mousemove)
+  // AND mirrored to state only for rendering. Clicks read the ref, never stale state.
+  const activeSnapRef = useRef(null);
+  const [activeSnapDisplay, setActiveSnapDisplay] = useState(null);
 
   const containerRef = useRef(null);
   const imgRef = useRef(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const dragOffsetStartRef = useRef({ x: 0, y: 0 });
 
-  /**
-   * Parallel metadata for currentPoints.
-   * snapMetaRef.current[i] is one of:
-   *   null                                      — free point
-   *   { regionId, pointIndex }                  — vertex snap
-   *   { regionId, isEdgeSnap: true,
-   *     snapRef: { type, regionId, edgeIndex, t } } — edge snap (structured ref)
-   */
-  const snapMetaRef = useRef([]);
+  // ---------------------------------------------------------------------------
+  // Helpers to keep currentStroke ref and currentPoints state in sync
+  // ---------------------------------------------------------------------------
+  const flushStroke = useCallback(() => {
+    setCurrentPoints(currentStroke.current.map(e => e.pt));
+  }, []);
 
+  const resetStroke = useCallback(() => {
+    currentStroke.current = [];
+    setCurrentPoints([]);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Image / resize
+  // ---------------------------------------------------------------------------
   const handleImageUpload = useCallback((e, targetView) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -455,18 +339,34 @@ export default function App() {
     return () => observer.disconnect();
   }, [images, view]);
 
+  // ---------------------------------------------------------------------------
+  // Keyboard: spacebar pan toggle
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.code === "Space" && document.activeElement.tagName !== "INPUT") {
         e.preventDefault();
         setIsSpacePressed(true);
       }
+      // Undo with Ctrl+Z / Cmd+Z
+      if ((e.ctrlKey || e.metaKey) && e.code === "KeyZ" && document.activeElement.tagName !== "INPUT") {
+        e.preventDefault();
+        if (currentStroke.current.length > 0) {
+          currentStroke.current = currentStroke.current.slice(0, -1);
+          flushStroke();
+          setGeoError(null);
+          setWarningMsg(null);
+        }
+      }
+      // Escape: discard in-progress
+      if (e.code === "Escape") {
+        resetStroke();
+        setGeoError(null);
+        setWarningMsg(null);
+      }
     };
-    const handleKeyUp = (e) => {
-      if (e.code === "Space") setIsSpacePressed(false);
-    };
+    const handleKeyUp = (e) => { if (e.code === "Space") setIsSpacePressed(false); };
     const handleBlur = () => setIsSpacePressed(false);
-
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", handleBlur);
@@ -475,8 +375,11 @@ export default function App() {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
     };
-  }, []);
+  }, [flushStroke, resetStroke]);
 
+  // ---------------------------------------------------------------------------
+  // Pan dragging
+  // ---------------------------------------------------------------------------
   const handleMouseDown = useCallback((e) => {
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     const isPanActive = mode === "pan" || isSpacePressed || e.button === 1 || e.button === 2;
@@ -503,97 +406,89 @@ export default function App() {
   }, [isDragging]);
 
   // ---------------------------------------------------------------------------
-  // Snap helper
+  // Snap helper (pure, no state deps — reads imgRef directly)
   // ---------------------------------------------------------------------------
-  const getSnappedPoint = useCallback((clientX, clientY) => {
+  const computeSnap = useCallback((clientX, clientY) => {
     if (!imgRef.current) return null;
     const rect = imgRef.current.getBoundingClientRect();
-    return resolveSnap(clientX, clientY, rect, currentPoints, regionsByView[view]);
-  }, [currentPoints, regionsByView, view]);
+    const pts = currentStroke.current.map(e => e.pt);
+    return resolveSnap(clientX, clientY, rect, pts, regionsByView[view]);
+  }, [regionsByView, view]);
 
   // ---------------------------------------------------------------------------
-  // Geometry validation for point placement (live, per-click)
-  // Checks whether adding the new segment (last point → candidate) would
-  // create a self-intersection with existing edges of the in-progress polygon.
+  // Geometry guards
   // ---------------------------------------------------------------------------
   const wouldCreateIntersection = useCallback((candidate) => {
-    if (currentPoints.length < 2) return false;
-    const result = newSegmentIntersectsPolygon(
-      currentPoints,
-      currentPoints[currentPoints.length - 1],
-      candidate,
-      false
-    );
-    return result.intersects;
-  }, [currentPoints]);
+    const pts = currentStroke.current.map(e => e.pt);
+    if (pts.length < 2) return false;
+    return newSegmentIntersectsPolygon(pts, pts[pts.length - 1], candidate, false).intersects;
+  }, []);
 
-  /**
-   * Check whether closing the polygon (connecting last point → first point)
-   * would create a self-intersection.
-   */
   const wouldClosingIntersect = useCallback(() => {
-    if (currentPoints.length < 3) return false;
-    const result = newSegmentIntersectsPolygon(
-      currentPoints,
-      currentPoints[currentPoints.length - 1],
-      currentPoints[0],
-      true
-    );
-    return result.intersects;
-  }, [currentPoints]);
+    const pts = currentStroke.current.map(e => e.pt);
+    if (pts.length < 3) return false;
+    return newSegmentIntersectsPolygon(pts, pts[pts.length - 1], pts[0], true).intersects;
+  }, []);
 
   // ---------------------------------------------------------------------------
   // handleFinishRegion
   // ---------------------------------------------------------------------------
   const handleFinishRegion = useCallback(() => {
-    if (currentPoints.length < 3) return;
+    const pts = currentStroke.current.map(e => e.pt);
+    if (pts.length < 3) return;
 
-    // 1. Check closing segment doesn't intersect existing edges
     if (wouldClosingIntersect()) {
-      setGeoError("Cannot close: closing segment intersects existing edges. Undo the last point(s) and try again.");
+      setGeoError("Cannot close — closing segment intersects existing edges. Undo the last point(s).");
       return;
     }
 
-    // 2. Simplify collinear points
-    const simplified = simplifyPolygon(currentPoints);
-
-    // 3. Full validation of the finalized polygon
+    const simplified = simplifyPolygon(pts);
     const validation = validatePolygon(simplified);
     if (!validation.valid) {
-      setGeoError(`Invalid polygon: ${validation.reason} Please undo and correct.`);
+      setGeoError(`Invalid polygon: ${validation.reason} Undo and correct.`);
       return;
     }
 
-    // 4. Enforce consistent winding (CCW in screen-space)
     const wound = enforceWindingCCW(simplified);
-
     const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
-    const region = {
-      id: crypto.randomUUID(),
-      name,
-      view,
-      points: wound,
-    };
+    const region = { id: crypto.randomUUID(), name, view, points: wound };
     setRegionsByView(prev => ({ ...prev, [view]: [...prev[view], region] }));
-    setCurrentPoints([]);
+    resetStroke();
     setRegionName("");
-    setActiveSnap(null);
+    activeSnapRef.current = null;
+    setActiveSnapDisplay(null);
     setGeoError(null);
-    snapMetaRef.current = [];
-  }, [currentPoints, regionName, view, regionsByView, wouldClosingIntersect]);
+    setWarningMsg(null);
+  }, [regionName, view, regionsByView, wouldClosingIntersect, resetStroke]);
 
   // ---------------------------------------------------------------------------
-  // Canvas interaction handlers
+  // Canvas mouse events
   // ---------------------------------------------------------------------------
   const handleCanvasMouseMove = useCallback((e) => {
     if (isDragging) return;
     if (mode === "draw" && !isSpacePressed && images[view]) {
-      const snap = getSnappedPoint(e.clientX, e.clientY);
-      setActiveSnap(snap);
+      // FIX 1: update ref synchronously so the next click always reads current snap
+      const snap = computeSnap(e.clientX, e.clientY);
+      activeSnapRef.current = snap;
+      setActiveSnapDisplay(snap);
+
+      // FIX 2: predictive uncloseable warning
+      if (snap && !snap.isFirstPoint) {
+        const pts = currentStroke.current.map(e => e.pt);
+        if (pts.length >= 2 && wouldMakeUncloseable(pts, snap.coords)) {
+          setWarningMsg("Placing here will make the polygon impossible to close.");
+        } else {
+          setWarningMsg(null);
+        }
+      } else {
+        setWarningMsg(null);
+      }
     } else {
-      setActiveSnap(null);
+      activeSnapRef.current = null;
+      setActiveSnapDisplay(null);
+      setWarningMsg(null);
     }
-  }, [mode, isSpacePressed, isDragging, images, view, getSnappedPoint]);
+  }, [mode, isSpacePressed, isDragging, images, view, computeSnap]);
 
   const handleCanvasClick = useCallback((e) => {
     if (e.button !== 0) return;
@@ -604,16 +499,17 @@ export default function App() {
     const dy = Math.abs(e.clientY - dragStartRef.current.y);
     if (dx > 3 || dy > 3) return;
 
-    const snap = activeSnap ?? getSnappedPoint(e.clientX, e.clientY);
+    // FIX 1: read from ref, not from stale state
+    const snap = activeSnapRef.current ?? computeSnap(e.clientX, e.clientY);
 
-    // --- Closure via first-point snap ---
+    // Closure via first-point snap
     if (snap?.isFirstPoint) {
       handleFinishRegion();
-      setActiveSnap(null);
+      activeSnapRef.current = null;
+      setActiveSnapDisplay(null);
       return;
     }
 
-    // Determine the candidate coordinate to be placed
     let candidate;
     let meta = null;
 
@@ -621,7 +517,7 @@ export default function App() {
       candidate = snap.coords;
       if (snap.regionId) {
         meta = snap.isEdgeSnap
-          ? { regionId: snap.regionId, isEdgeSnap: true, snapRef: snap.snapRef }
+          ? { regionId: snap.regionId, isEdgeSnap: true }
           : { regionId: snap.regionId, pointIndex: snap.pointIndex, isEdgeSnap: false };
       }
     } else {
@@ -629,37 +525,40 @@ export default function App() {
       if (!candidate) return;
     }
 
-    // --- Vertex hygiene: reject near-duplicate of last point ---
-    if (isNearDuplicate(currentPoints, candidate)) {
+    const pts = currentStroke.current.map(e => e.pt);
+
+    // Reject near-duplicate
+    if (isNearDuplicate(pts, candidate)) {
       setGeoError("Duplicate point: too close to the previous vertex.");
       return;
     }
 
-    // --- Self-intersection guard: reject if new segment would cross existing edges ---
+    // Reject self-intersection
     if (wouldCreateIntersection(candidate)) {
-      setGeoError("Cannot place point: the new segment would create a self-intersection.");
+      setGeoError("Cannot place point — new segment would create a self-intersection.");
       return;
     }
 
-    // Clear any previous error
     setGeoError(null);
 
-    // --- Shared-edge auto-close ---
-    const firstMeta = snapMetaRef.current[0];
+    // FIX 3: shared-edge auto-close requires >= 2 prior points (not >= 1)
+    const firstEntry = currentStroke.current[0];
+    const firstMeta = firstEntry?.meta ?? null;
     const isSharedEdgeClose =
       meta &&
       firstMeta &&
       !meta.isEdgeSnap &&
-      !firstMeta?.isEdgeSnap &&
-      meta.regionId === firstMeta?.regionId &&
-      meta.pointIndex !== firstMeta?.pointIndex &&
-      currentPoints.length >= 1;
+      !firstMeta.isEdgeSnap &&
+      meta.regionId === firstMeta.regionId &&
+      meta.pointIndex !== firstMeta.pointIndex &&
+      currentStroke.current.length >= 2; // FIX 3: was >= 1
 
     if (isSharedEdgeClose) {
-      const closed = [...currentPoints, candidate];
-      if (closed.length >= 3) {
-        // Validate before committing
-        const simplified = simplifyPolygon(closed);
+      // FIX 4: atomic append then commit — stroke is updated in one place
+      const tentative = [...currentStroke.current, { pt: candidate, meta }];
+      if (tentative.length >= 3) {
+        const tentativePts = tentative.map(e => e.pt);
+        const simplified = simplifyPolygon(tentativePts);
         const validation = validatePolygon(simplified);
         if (!validation.valid) {
           setGeoError(`Invalid polygon on auto-close: ${validation.reason}`);
@@ -669,25 +568,26 @@ export default function App() {
         const name = regionName.trim() || `${view}_region_${regionsByView[view].length + 1}`;
         const region = { id: crypto.randomUUID(), name, view, points: wound };
         setRegionsByView(p => ({ ...p, [view]: [...p[view], region] }));
-        setCurrentPoints([]);
+        resetStroke();
         setRegionName("");
-        setActiveSnap(null);
+        activeSnapRef.current = null;
+        setActiveSnapDisplay(null);
         setGeoError(null);
-        snapMetaRef.current = [];
+        setWarningMsg(null);
       } else {
-        snapMetaRef.current = [...snapMetaRef.current, meta];
-        setCurrentPoints(closed);
+        // FIX 4: single atomic push — ref and rendered state stay in sync
+        currentStroke.current = tentative;
+        flushStroke();
       }
       return;
     }
 
-    // --- Normal placement ---
-    snapMetaRef.current = [...snapMetaRef.current, meta];
-    setCurrentPoints(prev => [...prev, candidate]);
+    // Normal placement — FIX 4: single atomic push
+    currentStroke.current = [...currentStroke.current, { pt: candidate, meta }];
+    flushStroke();
   }, [
-    images, view, mode, isSpacePressed, activeSnap, currentPoints,
-    regionName, regionsByView, getSnappedPoint, handleFinishRegion,
-    wouldCreateIntersection,
+    images, view, mode, isSpacePressed, regionName, regionsByView,
+    computeSnap, handleFinishRegion, wouldCreateIntersection, resetStroke, flushStroke,
   ]);
 
   const handleDoubleClick = useCallback((e) => {
@@ -698,15 +598,16 @@ export default function App() {
   }, []);
 
   const handleContextMenu = useCallback((e) => {
-    const isPanActive = mode === "pan" || isSpacePressed || isDragging || e.button === 2;
-    if (isPanActive) e.preventDefault();
+    if (mode === "pan" || isSpacePressed || isDragging || e.button === 2) e.preventDefault();
   }, [mode, isSpacePressed, isDragging]);
 
   const handleUndoPoint = useCallback(() => {
-    snapMetaRef.current = snapMetaRef.current.slice(0, -1);
-    setCurrentPoints(prev => prev.slice(0, -1));
+    if (currentStroke.current.length === 0) return;
+    currentStroke.current = currentStroke.current.slice(0, -1);
+    flushStroke();
     setGeoError(null);
-  }, []);
+    setWarningMsg(null);
+  }, [flushStroke]);
 
   const handleDeleteRegion = useCallback((id) => {
     setRegionsByView(prev => ({
@@ -717,47 +618,24 @@ export default function App() {
 
   // ---------------------------------------------------------------------------
   // Export
-  // Resolves all edge-snap structured references to concrete coordinates,
-  // re-validates every polygon, enforces winding, and quantizes at 6dp.
+  // FIX 5: removed dead resolveEdgeSnapRef/__snapRef guard — points are already
+  // resolved coordinates. Export now simply re-validates, re-winds, and quantizes.
   // ---------------------------------------------------------------------------
   const handleExport = useCallback(() => {
-    const regionMap = {};
-    for (const v of VIEWS) {
-      for (const r of regionsByView[v]) {
-        regionMap[r.id] = r;
-      }
-    }
-
     const output = {};
     const errors = [];
 
     for (const v of VIEWS) {
       for (const region of regionsByView[v]) {
         const key = `${v}_${region.name}`;
-
-        // Resolve any edge-snap structural references in the stored points.
-        // (In the current flow, points stored in completed regions are already
-        // resolved coordinates; this guard handles future structured-ref storage.)
-        const resolvedPoints = region.points.map((pt) => {
-          if (pt && pt.__snapRef) {
-            const resolved = resolveEdgeSnapRef(pt.__snapRef, regionMap);
-            return resolved || pt;
-          }
-          return pt;
-        });
-
-        // Re-validate before export
-        const validation = validatePolygon(resolvedPoints);
+        const validation = validatePolygon(region.points);
         if (!validation.valid) {
           errors.push(`${key}: ${validation.reason}`);
           continue;
         }
-
-        // Enforce winding, simplify, then quantize
-        const simplified = simplifyPolygon(resolvedPoints);
+        const simplified = simplifyPolygon(region.points);
         const wound = enforceWindingCCW(simplified);
         const quantized = wound.map(([x, y]) => [quantize(x), quantize(y)]);
-
         output[key] = {
           view: region.view,
           winding: "ccw",
@@ -768,16 +646,24 @@ export default function App() {
     }
 
     if (errors.length > 0) {
-      alert(
-        `Export blocked — invalid polygon(s) detected:\n\n${errors.join("\n")}\n\nPlease delete and redraw the affected regions.`
-      );
+      alert(`Export blocked — invalid polygon(s):\n\n${errors.join("\n")}\n\nDelete and redraw the affected regions.`);
       return;
     }
-
     downloadJSON(output);
   }, [regionsByView]);
 
   const totalRegions = VIEWS.reduce((acc, v) => acc + regionsByView[v].length, 0);
+
+  // Derived from currentPoints state (not the ref) — safe to read during render.
+  // Mirrors wouldClosingIntersect but operates on the already-flushed state array.
+  const closingWouldIntersect =
+    currentPoints.length >= 3 &&
+    newSegmentIntersectsPolygon(
+      currentPoints,
+      currentPoints[currentPoints.length - 1],
+      currentPoints[0],
+      true,
+    ).intersects;
 
   const handleWheel = useCallback((e) => {
     e.preventDefault();
@@ -809,32 +695,22 @@ export default function App() {
   // -------------------------------------------------------------------------
   return (
     <div style={{
-      width: "100%",
-      height: "100%",
-      background: "#0f0f0f",
-      color: "#e8e6e0",
+      width: "100%", height: "100%",
+      background: "#0f0f0f", color: "#e8e6e0",
       fontFamily: "'IBM Plex Mono', 'Courier New', monospace",
-      display: "flex",
-      flexDirection: "column",
-      overflow: "hidden",
+      display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
       {/* Header */}
       <div style={{
-        borderBottom: "1px solid #2a2a2a",
-        padding: "12px 20px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        background: "#111",
-        zIndex: 5,
+        borderBottom: "1px solid #2a2a2a", padding: "12px 20px",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        background: "#111", zIndex: 5,
       }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.12em", color: "#e8e6e0", textTransform: "uppercase" }}>
             Region Annotator
           </span>
-          <span style={{ fontSize: 11, color: "#555", letterSpacing: "0.06em" }}>
-            body → named polygons
-          </span>
+          <span style={{ fontSize: 11, color: "#555", letterSpacing: "0.06em" }}>body → named polygons</span>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 11, color: "#555" }}>{totalRegions} region{totalRegions !== 1 ? "s" : ""}</span>
@@ -849,84 +725,60 @@ export default function App() {
         {VIEWS.map(v => (
           <button key={v} onClick={() => {
             setView(v);
-            setCurrentPoints([]);
-            snapMetaRef.current = [];
+            resetStroke();
             setZoom(1);
             setPanOffset({ x: 0, y: 0 });
-            setActiveSnap(null);
+            activeSnapRef.current = null;
+            setActiveSnapDisplay(null);
             setGeoError(null);
+            setWarningMsg(null);
           }} style={{
             padding: "8px 20px",
             background: view === v ? "#1a1a1a" : "transparent",
             color: view === v ? "#e8e6e0" : "#555",
             border: "none",
             borderBottom: view === v ? "2px solid #e8e6e0" : "2px solid transparent",
-            cursor: "pointer",
-            fontFamily: "inherit",
-            fontSize: 12,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
+            cursor: "pointer", fontFamily: "inherit", fontSize: 12,
+            letterSpacing: "0.08em", textTransform: "uppercase",
           }}>
             {v}
             {regionsByView[v].length > 0 && (
-              <span style={{
-                marginLeft: 6, fontSize: 10,
-                background: "#2a2a2a", color: "#888",
-                borderRadius: 9, padding: "1px 5px",
-              }}>{regionsByView[v].length}</span>
+              <span style={{ marginLeft: 6, fontSize: 10, background: "#2a2a2a", color: "#888", borderRadius: 9, padding: "1px 5px" }}>
+                {regionsByView[v].length}
+              </span>
             )}
           </button>
         ))}
       </div>
 
-      {/* Main Container */}
+      {/* Main */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {/* Canvas */}
         <div
           ref={containerRef}
           style={{
-            flex: 1,
-            position: "relative",
-            overflow: "hidden",
-            background: "#0a0a0a",
-            cursor: !images[view]
-              ? "default"
-              : (mode === "pan" || isSpacePressed)
-                ? (isDragging ? "grabbing" : "grab")
-                : "crosshair",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            flex: 1, position: "relative", overflow: "hidden", background: "#0a0a0a",
+            cursor: !images[view] ? "default"
+              : (mode === "pan" || isSpacePressed) ? (isDragging ? "grabbing" : "grab")
+              : "crosshair",
+            display: "flex", alignItems: "center", justifyContent: "center",
           }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleCanvasMouseMove}
           onClick={handleCanvasClick}
           onDoubleClick={handleDoubleClick}
           onContextMenu={handleContextMenu}
-          onMouseLeave={() => setActiveSnap(null)}
+          onMouseLeave={() => {
+            activeSnapRef.current = null;
+            setActiveSnapDisplay(null);
+            setWarningMsg(null);
+          }}
         >
           {!images[view] ? (
-            <label style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 12,
-              cursor: "pointer",
-              color: "#444",
-            }}>
-              <div style={{
-                width: 80, height: 80,
-                border: "1px dashed #333",
-                borderRadius: 4,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 28,
-                color: "#333",
-              }}>+</div>
+            <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, cursor: "pointer", color: "#444" }}>
+              <div style={{ width: 80, height: 80, border: "1px dashed #333", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, color: "#333" }}>+</div>
               <span style={{ fontSize: 12, letterSpacing: "0.08em" }}>Load {view}.png</span>
-              <input type="file" accept="image/*" style={{ display: "none" }}
-                onChange={e => handleImageUpload(e, view)} />
+              <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleImageUpload(e, view)} />
             </label>
           ) : (
             <div style={{
@@ -941,23 +793,10 @@ export default function App() {
                 src={images[view]}
                 alt={view}
                 draggable={false}
-                style={{
-                  display: "block",
-                  maxHeight: "calc(100vh - 160px)",
-                  maxWidth: "100%",
-                  pointerEvents: "none",
-                }}
+                style={{ display: "block", maxHeight: "calc(100vh - 160px)", maxWidth: "100%", pointerEvents: "none" }}
               />
               {/* SVG overlay */}
-              <svg
-                style={{
-                  position: "absolute",
-                  top: 0, left: 0,
-                  width: "100%",
-                  height: "100%",
-                  overflow: "visible",
-                }}
-              >
+              <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", overflow: "visible" }}>
                 {/* Completed regions */}
                 {regionsByView[view].map((region, ri) => {
                   const color = getColor(ri);
@@ -981,8 +820,7 @@ export default function App() {
                       />
                       <text
                         x={first.x} y={first.y - 6 / zoom}
-                        fill={color}
-                        fontSize={labelSize}
+                        fill={color} fontSize={labelSize}
                         fontFamily="IBM Plex Mono, monospace"
                         letterSpacing="0.06em"
                         style={{ pointerEvents: "none", userSelect: "none" }}
@@ -1005,38 +843,67 @@ export default function App() {
                   />
                 )}
 
-                {/* Current vertex dots */}
+                {/* Preview segment: last point → snap/cursor */}
+                {currentPoints.length >= 1 && activeSnapDisplay && !activeSnapDisplay.isFirstPoint && (() => {
+                  const last = toXY(currentPoints[currentPoints.length - 1]);
+                  const next = toXY(activeSnapDisplay.coords);
+                  const isUncloseable = warningMsg != null;
+                  return (
+                    <line
+                      x1={last.x} y1={last.y}
+                      x2={next.x} y2={next.y}
+                      stroke={isUncloseable ? "#f87171" : "#facc1588"}
+                      strokeWidth={1 / zoom}
+                      strokeDasharray={`${3 / zoom} ${2 / zoom}`}
+                      vectorEffect="non-scaling-stroke"
+                      style={{ pointerEvents: "none" }}
+                    />
+                  );
+                })()}
+
+                {/* Closing preview: when close-snap active */}
+                {currentPoints.length >= 3 && activeSnapDisplay?.isFirstPoint && (() => {
+                  const last = toXY(currentPoints[currentPoints.length - 1]);
+                  const first = toXY(currentPoints[0]);
+                  return (
+                    <line
+                      x1={last.x} y1={last.y}
+                      x2={first.x} y2={first.y}
+                      stroke={closingWouldIntersect ? "#f87171" : "#4ade8088"}
+                      strokeWidth={1 / zoom}
+                      strokeDasharray={`${3 / zoom} ${2 / zoom}`}
+                      vectorEffect="non-scaling-stroke"
+                      style={{ pointerEvents: "none" }}
+                    />
+                  );
+                })()}
+
+                {/* Vertex dots */}
                 {currentPoints.map((pt, i) => {
                   const { x, y } = toXY(pt);
                   const r = (i === 0 ? 4 : 2.5) / zoom;
-                  const sw = 1 / zoom;
                   return (
                     <circle
-                      key={i}
-                      cx={x} cy={y}
-                      r={r}
+                      key={i} cx={x} cy={y} r={r}
                       fill={i === 0 ? "#facc15" : "#fde68a"}
-                      stroke="#0f0f0f"
-                      strokeWidth={sw}
+                      stroke="#0f0f0f" strokeWidth={1 / zoom}
                       vectorEffect="non-scaling-stroke"
                     />
                   );
                 })}
 
-                {/* Snapping indicator */}
-                {activeSnap && (() => {
-                  const { x, y } = toXY(activeSnap.coords);
+                {/* Snap indicator */}
+                {activeSnapDisplay && (() => {
+                  const { x, y } = toXY(activeSnapDisplay.coords);
                   const sw = 1.5 / zoom;
-                  const fontSize = 9 / zoom;
-                  const labelOffset = 10 / zoom;
 
-                  if (activeSnap.isEdgeSnap) {
+                  if (activeSnapDisplay.isEdgeSnap) {
                     const b = bounds[view];
                     if (!b) return null;
-                    const n = regionsByView[view].find(r => r.id === activeSnap.regionId);
-                    if (!n) return null;
-                    const pts = n.points;
-                    const ai = activeSnap.pointIndex;
+                    const region = regionsByView[view].find(r => r.id === activeSnapDisplay.regionId);
+                    if (!region) return null;
+                    const pts = region.points;
+                    const ai = activeSnapDisplay.pointIndex;
                     const bi = (ai + 1) % pts.length;
                     const ex = pts[bi][0] * b.width  - pts[ai][0] * b.width;
                     const ey = pts[bi][1] * b.height - pts[ai][1] * b.height;
@@ -1057,24 +924,24 @@ export default function App() {
                           stroke="#a78bfa" strokeWidth={sw}
                           strokeLinecap="round" vectorEffect="non-scaling-stroke"
                         />
-                        <circle cx={x} cy={y} r={2.5 / zoom}
-                          fill="#a78bfa" vectorEffect="non-scaling-stroke" />
+                        <circle cx={x} cy={y} r={2.5 / zoom} fill="#a78bfa" vectorEffect="non-scaling-stroke" />
                       </g>
                     );
                   }
 
-                  const r = (activeSnap.isFirstPoint ? 7 : 5) / zoom;
+                  const r = (activeSnapDisplay.isFirstPoint ? 7 : 5) / zoom;
+                  const fontSize = 9 / zoom;
+                  const labelOffset = 10 / zoom;
                   return (
-                    <g>
+                    <g style={{ pointerEvents: "none" }}>
                       <circle
                         cx={x} cy={y} r={r}
-                        fill={activeSnap.isFirstPoint ? "rgba(74, 222, 128, 0.2)" : "rgba(250, 204, 21, 0.15)"}
-                        stroke={activeSnap.isFirstPoint ? "#4ade80" : "#facc15"}
+                        fill={activeSnapDisplay.isFirstPoint ? "rgba(74, 222, 128, 0.2)" : "rgba(250, 204, 21, 0.15)"}
+                        stroke={activeSnapDisplay.isFirstPoint ? "#4ade80" : "#facc15"}
                         strokeWidth={sw}
                         strokeDasharray={`${3 / zoom} ${2 / zoom}`}
-                        style={{ pointerEvents: "none" }}
                       />
-                      {activeSnap.isFirstPoint && (
+                      {activeSnapDisplay.isFirstPoint && (
                         <text
                           x={x + labelOffset} y={y + fontSize * 0.4}
                           fill="#4ade80" fontSize={fontSize}
@@ -1091,128 +958,88 @@ export default function App() {
             </div>
           )}
 
-          {/* Geometry error banner — visible, non-modal, dismissable */}
+          {/* Error banner */}
           {geoError && (
             <div style={{
-              position: "absolute",
-              top: 12,
-              left: "50%",
-              transform: "translateX(-50%)",
-              background: "#1a0808",
-              border: "1px solid #7f1d1d",
-              color: "#fca5a5",
-              padding: "8px 14px",
-              borderRadius: 4,
-              fontSize: 11,
-              fontFamily: "IBM Plex Mono, monospace",
-              letterSpacing: "0.04em",
-              zIndex: 20,
-              maxWidth: "calc(100% - 48px)",
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
+              position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
+              background: "#1a0808", border: "1px solid #7f1d1d", color: "#fca5a5",
+              padding: "8px 14px", borderRadius: 4, fontSize: 11,
+              fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em",
+              zIndex: 20, maxWidth: "calc(100% - 48px)",
+              display: "flex", alignItems: "center", gap: 10,
               boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
             }}>
               <span style={{ flexShrink: 0, opacity: 0.7 }}>⚠</span>
               <span style={{ flex: 1 }}>{geoError}</span>
-              <button
-                onClick={() => setGeoError(null)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "#f87171",
-                  cursor: "pointer",
-                  fontSize: 14,
-                  padding: "0 2px",
-                  lineHeight: 1,
-                  flexShrink: 0,
-                }}
-              >×</button>
+              <button onClick={() => setGeoError(null)}
+                style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>
+                ×
+              </button>
             </div>
           )}
 
-          {/* Floating Workspace Toolbar */}
+          {/* Warning banner (non-blocking, predictive) */}
+          {!geoError && warningMsg && (
+            <div style={{
+              position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
+              background: "#1a1200", border: "1px solid #78350f", color: "#fcd34d",
+              padding: "7px 14px", borderRadius: 4, fontSize: 11,
+              fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em",
+              zIndex: 20, maxWidth: "calc(100% - 48px)",
+              display: "flex", alignItems: "center", gap: 10,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+              pointerEvents: "none",
+            }}>
+              <span style={{ flexShrink: 0, opacity: 0.6 }}>◈</span>
+              <span>{warningMsg}</span>
+            </div>
+          )}
+
+          {/* Toolbar */}
           {images[view] && (
             <div style={{
-              position: "absolute",
-              bottom: 12,
-              right: 12,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              background: "rgba(17, 17, 17, 0.85)",
-              backdropFilter: "blur(8px)",
-              border: "1px solid #2a2a2a",
-              padding: "4px 8px",
-              borderRadius: 6,
-              zIndex: 10,
-              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)",
+              position: "absolute", bottom: 12, right: 12,
+              display: "flex", alignItems: "center", gap: 6,
+              background: "rgba(17, 17, 17, 0.85)", backdropFilter: "blur(8px)",
+              border: "1px solid #2a2a2a", padding: "4px 8px", borderRadius: 6, zIndex: 10,
+              boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
             }}>
               <button
                 onClick={() => setMode(m => m === "draw" ? "pan" : "draw")}
                 style={toolbarBtnStyle(mode === "pan" || isSpacePressed)}
-                title="Toggle Draw / Pan Mode (Spacebar)"
+                title="Toggle Draw / Pan (Space)"
               >
                 {mode === "pan" || isSpacePressed ? "✋ Pan" : "✏️ Draw"}
               </button>
-
               <div style={{ width: 1, height: 16, background: "#2a2a2a", margin: "0 4px" }} />
-
-              <button
-                onClick={() => setZoom(z => Math.max(0.5, z / 1.25))}
-                style={toolbarBtnStyle(false)}
-                title="Zoom Out (Scroll Down)"
-              >-</button>
+              <button onClick={() => setZoom(z => Math.max(0.5, z / 1.25))} style={toolbarBtnStyle(false)} title="Zoom Out">-</button>
               <span style={{ fontSize: 11, minWidth: 42, textAlign: "center", userSelect: "none" }}>
                 {Math.round(zoom * 100)}%
               </span>
-              <button
-                onClick={() => setZoom(z => Math.min(8, z * 1.25))}
-                style={toolbarBtnStyle(false)}
-                title="Zoom In (Scroll Up)"
-              >+</button>
-
+              <button onClick={() => setZoom(z => Math.min(8, z * 1.25))} style={toolbarBtnStyle(false)} title="Zoom In">+</button>
               <div style={{ width: 1, height: 16, background: "#2a2a2a", margin: "0 4px" }} />
-
-              <button
-                onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
-                style={toolbarBtnStyle(false)}
-                title="Reset Zoom & Pan (Double Click Background)"
-              >↺</button>
+              <button onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }} style={toolbarBtnStyle(false)} title="Reset View">↺</button>
             </div>
           )}
 
           {images[view] && (
             <label style={{
-              position: "absolute",
-              bottom: 12, left: 12,
-              fontSize: 10, color: "#888",
-              cursor: "pointer",
-              background: "#111",
-              padding: "4px 8px",
-              border: "1px solid #222",
-              borderRadius: 4,
-              letterSpacing: "0.06em",
-              zIndex: 10,
+              position: "absolute", bottom: 12, left: 12,
+              fontSize: 10, color: "#888", cursor: "pointer",
+              background: "#111", padding: "4px 8px",
+              border: "1px solid #222", borderRadius: 4, letterSpacing: "0.06em", zIndex: 10,
             }}>
               swap image
-              <input type="file" accept="image/*" style={{ display: "none" }}
-                onChange={e => handleImageUpload(e, view)} />
+              <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleImageUpload(e, view)} />
             </label>
           )}
         </div>
 
         {/* Sidebar */}
         <div style={{
-          width: 240,
-          background: "#111",
-          borderLeft: "1px solid #2a2a2a",
-          display: "flex",
-          flexDirection: "column",
-          fontSize: 12,
-          zIndex: 5,
+          width: 240, background: "#111", borderLeft: "1px solid #2a2a2a",
+          display: "flex", flexDirection: "column", fontSize: 12, zIndex: 5,
         }}>
-          {/* Draw controls */}
           <div style={{ padding: "16px", borderBottom: "1px solid #1e1e1e" }}>
             <div style={{ color: "#555", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>
               New Region
@@ -1223,17 +1050,9 @@ export default function App() {
               onKeyDown={e => { if (e.key === "Enter") handleFinishRegion(); }}
               placeholder={`${view}_chest`}
               style={{
-                width: "100%",
-                background: "#0f0f0f",
-                border: "1px solid #2a2a2a",
-                borderRadius: 3,
-                color: "#e8e6e0",
-                fontFamily: "inherit",
-                fontSize: 12,
-                padding: "6px 8px",
-                marginBottom: 10,
-                boxSizing: "border-box",
-                outline: "none",
+                width: "100%", background: "#0f0f0f", border: "1px solid #2a2a2a",
+                borderRadius: 3, color: "#e8e6e0", fontFamily: "inherit", fontSize: 12,
+                padding: "6px 8px", marginBottom: 10, boxSizing: "border-box", outline: "none",
               }}
             />
             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
@@ -1254,12 +1073,19 @@ export default function App() {
             </div>
             {currentPoints.length > 0 && (
               <button
-                onClick={() => { snapMetaRef.current = []; setCurrentPoints([]); setGeoError(null); }}
+                onClick={() => { resetStroke(); setGeoError(null); setWarningMsg(null); }}
                 style={{ ...btnStyle("#1a1a1a", "#555", false), width: "100%", fontSize: 11 }}
               >
                 Discard
               </button>
             )}
+            <div style={{ marginTop: 10, fontSize: 10, color: "#333", lineHeight: 1.7 }}>
+              <div>Ctrl+Z — undo point</div>
+              <div>Esc — discard</div>
+              <div>Space — pan mode</div>
+              <div>Scroll — zoom</div>
+              <div>Dbl-click bg — reset view</div>
+            </div>
           </div>
 
           {/* Region list */}
@@ -1280,12 +1106,8 @@ export default function App() {
                     onMouseEnter={() => setHoveredId(region.id)}
                     onMouseLeave={() => setHoveredId(null)}
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "5px 7px",
-                      marginBottom: 4,
-                      borderRadius: 3,
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "5px 7px", marginBottom: 4, borderRadius: 3,
                       background: hoveredId === region.id ? "#1a1a1a" : "transparent",
                       border: `1px solid ${hoveredId === region.id ? "#2a2a2a" : "transparent"}`,
                       cursor: "default",
@@ -1319,8 +1141,7 @@ export default function App() {
             {VIEWS.map(v => (
               <div key={v} style={{
                 display: "flex", justifyContent: "space-between",
-                fontSize: 11, color: v === view ? "#e8e6e0" : "#444",
-                marginBottom: 4,
+                fontSize: 11, color: v === view ? "#e8e6e0" : "#444", marginBottom: 4,
               }}>
                 <span>{v}</span>
                 <span>{regionsByView[v].length} region{regionsByView[v].length !== 1 ? "s" : ""}</span>
@@ -1345,14 +1166,10 @@ function btnStyle(bg, fg, disabled) {
     background: disabled ? "#161616" : bg,
     color: disabled ? "#333" : fg,
     border: `1px solid ${disabled ? "#222" : fg + "44"}`,
-    borderRadius: 3,
-    padding: "5px 10px",
-    fontSize: 11,
-    fontFamily: "IBM Plex Mono, monospace",
-    letterSpacing: "0.06em",
+    borderRadius: 3, padding: "5px 10px", fontSize: 11,
+    fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.06em",
     cursor: disabled ? "not-allowed" : "pointer",
-    whiteSpace: "nowrap",
-    transition: "background 0.2s, color 0.2s",
+    whiteSpace: "nowrap", transition: "background 0.2s, color 0.2s",
   };
 }
 
@@ -1360,13 +1177,8 @@ function toolbarBtnStyle(active) {
   return {
     background: active ? "rgba(96, 165, 250, 0.15)" : "transparent",
     color: active ? "#60a5fa" : "#888",
-    border: "none",
-    borderRadius: 4,
-    padding: "4px 8px",
-    fontSize: 11,
-    fontFamily: "inherit",
-    cursor: "pointer",
-    outline: "none",
+    border: "none", borderRadius: 4, padding: "4px 8px", fontSize: 11,
+    fontFamily: "inherit", cursor: "pointer", outline: "none",
     transition: "background 0.2s, color 0.2s",
   };
 }
