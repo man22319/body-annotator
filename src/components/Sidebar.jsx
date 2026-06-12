@@ -3,7 +3,7 @@ import { getColor, btnStyle } from "../constants";
 export default function Sidebar({
   regionName, setRegionName, currentPoints,
   regions, hoveredId, setHoveredId, selectedId,
-  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onExport,
+  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onMirrorRegion, onExport,
   onUndo, onRedo, canUndo, canRedo,
 }) {
   const totalRegions = regions.length;
@@ -84,6 +84,11 @@ export default function Sidebar({
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                   <span style={{ fontSize: 10, color: "#444" }}>{region.points.length}pt</span>
+                  <button
+                    onClick={() => onMirrorRegion(region.id)}
+                    style={{ background: "none", border: "none", color: "#60a5fa", cursor: "pointer", fontSize: 13, padding: "0 2px", lineHeight: 1 }}
+                    title="Duplicate & Mirror"
+                  >◨</button>
                   <button
                     onClick={() => onDeleteRegion(region.id)}
                     style={{ background: "none", border: "none", color: "#444", cursor: "pointer", fontSize: 13, padding: "0 2px", lineHeight: 1 }}

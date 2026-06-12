@@ -406,6 +406,35 @@ export default function App() {
     if (selectedId === id) setSelectedId(null);
   }, [regions, selectedId, setRegions]);
 
+  const handleMirrorRegion = useCallback((id) => {
+    const source = regions.find(r => r.id === id);
+    if (!source) return;
+
+    // Intelligent name swap: _l <-> _r, otherwise append _mirrored
+    let mirroredName;
+    if (/_l$/i.test(source.name)) {
+      mirroredName = source.name.replace(/_l$/i, '_r');
+    } else if (/_r$/i.test(source.name)) {
+      mirroredName = source.name.replace(/_r$/i, '_l');
+    } else {
+      mirroredName = source.name + '_mirrored';
+    }
+
+    // Flip horizontally: x' = 1 - x, y' = y
+    const flippedPoints = source.points.map(([x, y]) => [1 - x, y]);
+
+    // Flipping reverses winding order, so re-enforce CCW
+    const validPoints = enforceWindingCCW(flippedPoints);
+
+    const newRegion = {
+      id: crypto.randomUUID(),
+      name: mirroredName,
+      points: validPoints,
+    };
+
+    setRegions([...regions, newRegion]);
+  }, [regions, setRegions]);
+
   // -- Export --
   const handleExport = useCallback(() => {
     const output = {};
@@ -582,6 +611,7 @@ export default function App() {
           onUndoPoint={handleUndoPoint}
           onDiscard={() => { resetStroke(); setGeoError(null); setWarningMsg(null); }}
           onDeleteRegion={handleDeleteRegion}
+          onMirrorRegion={handleMirrorRegion}
           onExport={handleExport}
           onUndo={undo}
           onRedo={redo}
