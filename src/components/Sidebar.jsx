@@ -42,7 +42,7 @@ export default function Sidebar({
           </button>
         )}
         <div style={{ marginTop: 10, fontSize: 10, color: "#333", lineHeight: 1.7 }}>
-          <div>Ctrl+Z / Ctrl+Shift+Z — undo / redo</div>
+          <div>Ctrl+Z — undo / Ctrl+Y — redo</div>
           <div>Esc — discard</div>
           <div>Space — pan mode</div>
           <div>Scroll — zoom</div>
