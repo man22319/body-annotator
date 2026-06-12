@@ -45,8 +45,8 @@ export default function Sidebar({
           <div>Ctrl+Z — undo / Ctrl+Y — redo</div>
           <div>Esc — discard</div>
           <div>Space — pan mode</div>
-          <div>Scroll — zoom</div>
-          <div>Dbl-click bg — reset view</div>
+          <div>Two-finger swipe — pan</div>
+          <div>Pinch / Ctrl+scroll — zoom</div>
         </div>
       </div>
 

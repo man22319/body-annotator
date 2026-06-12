@@ -445,11 +445,17 @@ export default function App() {
       true,
     ).intersects;
 
-  // -- Smooth zoom --
+  // -- Smooth zoom + trackpad pan --
   const handleWheel = useCallback((e) => {
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.06 : 1 / 1.06;
-    setZoom(z => Math.min(30, Math.max(0.1, z * factor)));
+    if (e.ctrlKey || e.metaKey) {
+      // Pinch-to-zoom (trackpad) or Ctrl+scroll (mouse)
+      const factor = e.deltaY < 0 ? 1.06 : 1 / 1.06;
+      setZoom(z => Math.min(30, Math.max(0.1, z * factor)));
+    } else {
+      // Two-finger swipe (trackpad) or plain scroll → pan
+      setPanOffset(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+    }
   }, []);
 
   useEffect(() => {
