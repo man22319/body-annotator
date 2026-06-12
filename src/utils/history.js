@@ -9,9 +9,9 @@ const MAX_HISTORY = 50;
  */
 export function useHistory(initial) {
   const [index, setIndex] = useState(0);
+  const [state, setState] = useState(initial);
+  const [stackLen, setStackLen] = useState(1);
   const stackRef = useRef([initial]);
-
-  const state = stackRef.current[index];
 
   const set = useCallback((next) => {
     const stack = stackRef.current;
@@ -21,19 +21,30 @@ export function useHistory(initial) {
     // Cap history size
     if (trimmed.length > MAX_HISTORY) trimmed.shift();
     stackRef.current = trimmed;
-    setIndex(trimmed.length - 1);
+    const newIndex = trimmed.length - 1;
+    setIndex(newIndex);
+    setState(trimmed[newIndex]);
+    setStackLen(trimmed.length);
   }, [index]);
 
   const undo = useCallback(() => {
-    setIndex((i) => Math.max(0, i - 1));
+    setIndex((i) => {
+      const newIndex = Math.max(0, i - 1);
+      setState(stackRef.current[newIndex]);
+      return newIndex;
+    });
   }, []);
 
   const redo = useCallback(() => {
-    setIndex((i) => Math.min(stackRef.current.length - 1, i + 1));
+    setIndex((i) => {
+      const newIndex = Math.min(stackRef.current.length - 1, i + 1);
+      setState(stackRef.current[newIndex]);
+      return newIndex;
+    });
   }, []);
 
   const canUndo = index > 0;
-  const canRedo = index < stackRef.current.length - 1;
+  const canRedo = index < stackLen - 1;
 
   return { state, set, undo, redo, canUndo, canRedo };
 }

@@ -544,9 +544,9 @@ export default function App() {
               onZoomIn={() => setZoom(z => Math.min(30, z * 1.15))}
               onZoomOut={() => setZoom(z => Math.max(0.1, z / 1.15))}
               onResetView={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
-              onUndo={currentStroke.current.length > 0 ? handleUndoPoint : undo}
+              onUndo={currentPoints.length > 0 ? handleUndoPoint : undo}
               onRedo={redo}
-              canUndo={currentStroke.current.length > 0 || canUndo}
+              canUndo={currentPoints.length > 0 || canUndo}
               canRedo={canRedo}
             />
           )}
