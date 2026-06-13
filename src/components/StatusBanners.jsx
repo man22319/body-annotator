@@ -3,18 +3,29 @@ export function ErrorBanner({ message, onDismiss }) {
   return (
     <div style={{
       position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
-      background: "#1a0808", border: "1px solid #7f1d1d", color: "#fca5a5",
-      padding: "8px 14px", borderRadius: 4, fontSize: 11,
-      fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em",
+      background: "rgba(255, 69, 58, 0.12)", border: "1px solid rgba(255, 69, 58, 0.3)",
+      color: "#ff6961",
+      padding: "10px 16px", borderRadius: 12, fontSize: 14,
+      fontFamily: "-apple-system, 'SF Pro Text', system-ui, sans-serif",
+      fontWeight: 500,
       zIndex: 20, maxWidth: "calc(100% - 48px)",
-      display: "flex", alignItems: "center", gap: 10,
-      boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", gap: 12,
+      backdropFilter: "blur(20px) saturate(180%)",
+      WebkitBackdropFilter: "blur(20px) saturate(180%)",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
     }}>
-      <span style={{ flexShrink: 0, opacity: 0.7, fontWeight: 700 }}>!</span>
+      <span style={{ flexShrink: 0, fontSize: 18 }}>⚠</span>
       <span style={{ flex: 1 }}>{message}</span>
       <button onClick={onDismiss}
-        style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>
-        x
+        style={{
+          background: "none", border: "none",
+          color: "#ff453a", fontSize: 18,
+          padding: "4px 8px", minHeight: 36, minWidth: 36,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
+        ✕
       </button>
     </div>
   );
@@ -25,15 +36,19 @@ export function WarningBanner({ message }) {
   return (
     <div style={{
       position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
-      background: "#1a1200", border: "1px solid #78350f", color: "#fcd34d",
-      padding: "7px 14px", borderRadius: 4, fontSize: 11,
-      fontFamily: "IBM Plex Mono, monospace", letterSpacing: "0.04em",
+      background: "rgba(255, 214, 10, 0.1)", border: "1px solid rgba(255, 214, 10, 0.25)",
+      color: "#ffd60a",
+      padding: "10px 16px", borderRadius: 12, fontSize: 14,
+      fontFamily: "-apple-system, 'SF Pro Text', system-ui, sans-serif",
+      fontWeight: 500,
       zIndex: 20, maxWidth: "calc(100% - 48px)",
-      display: "flex", alignItems: "center", gap: 10,
-      boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", gap: 12,
+      backdropFilter: "blur(20px) saturate(180%)",
+      WebkitBackdropFilter: "blur(20px) saturate(180%)",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
       pointerEvents: "none",
     }}>
-      <span style={{ flexShrink: 0, opacity: 0.6, fontWeight: 700 }}>!</span>
+      <span style={{ flexShrink: 0, fontSize: 18 }}>⚠</span>
       <span>{message}</span>
     </div>
   );

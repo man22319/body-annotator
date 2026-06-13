@@ -1,5 +1,5 @@
 // ===========================================================================
-// Coordinate utilities
+// Coordinate utilities — pointer-event aware
 // ===========================================================================
 
 export function eventToNorm(e, imgEl) {
@@ -10,6 +10,7 @@ export function eventToNorm(e, imgEl) {
   return [x, y];
 }
 
+/** Convert a normalized point to a PointerEvent-style screen position. */
 export function normToScreen(normPt, rect) {
   return {
     x: rect.left + normPt[0] * rect.width,
@@ -22,10 +23,13 @@ export function screenDist(ax, ay, bx, by) {
 }
 
 // ===========================================================================
-// Snapping resolver
+// Snapping resolver — adaptive thresholds for pen vs finger
 // ===========================================================================
 
-const SNAP_THRESHOLD_PX = 14;
+/** Snap threshold: tighter for Apple Pencil, looser for finger touch */
+export function getSnapThreshold(pointerType) {
+  return pointerType === "pen" ? 14 : 24;
+}
 
 function projectPointOntoSegment(px, py, ax, ay, bx, by) {
   const abx = bx - ax, aby = by - ay;
@@ -35,7 +39,9 @@ function projectPointOntoSegment(px, py, ax, ay, bx, by) {
   return { x: ax + t * abx, y: ay + t * aby, t };
 }
 
-export function resolveSnap(clientX, clientY, rect, currentPoints, regions) {
+export function resolveSnap(clientX, clientY, rect, currentPoints, regions, pointerType = "pen") {
+  const SNAP_THRESHOLD_PX = getSnapThreshold(pointerType);
+
   // Tier 1: first vertex (closure)
   if (currentPoints.length >= 3) {
     const first = currentPoints[0];
