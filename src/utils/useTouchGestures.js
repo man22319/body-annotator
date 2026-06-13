@@ -173,17 +173,23 @@ export function useTouchGestures({
     if (!el) return;
 
     const prevent = (e) => e.preventDefault();
+    // Only prevent touchstart/touchmove on non-interactive targets.
+    // Buttons, inputs, etc. need native touch events so click synthesis works on iPad.
+    const preventIfNotInteractive = (e) => {
+      if (e.target.closest("button, input, label, a, [role='button']")) return;
+      e.preventDefault();
+    };
     el.addEventListener("gesturestart", prevent, { passive: false });
     el.addEventListener("gesturechange", prevent, { passive: false });
     el.addEventListener("gestureend", prevent, { passive: false });
-    el.addEventListener("touchstart", prevent, { passive: false });
+    el.addEventListener("touchstart", preventIfNotInteractive, { passive: false });
     el.addEventListener("touchmove", prevent, { passive: false });
 
     return () => {
       el.removeEventListener("gesturestart", prevent);
       el.removeEventListener("gesturechange", prevent);
       el.removeEventListener("gestureend", prevent);
-      el.removeEventListener("touchstart", prevent);
+      el.removeEventListener("touchstart", preventIfNotInteractive);
       el.removeEventListener("touchmove", prevent);
     };
   }, [containerRef]);
