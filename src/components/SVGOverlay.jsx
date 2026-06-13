@@ -31,7 +31,7 @@ export default function SVGOverlay({
         const isDragging = draggingId === region.id;
         const isHovered = hoveredId === region.id;
         const sw = (isSelected ? 2.5 : isHovered ? 2 : 1.5) / zoom;
-        const labelSize = Math.max(11, 12 / zoom);
+        const labelSize = 9 / zoom;
         const fillOpacity = isDragging ? 0.5 : isSelected ? 0.4 : isHovered ? 0.35 : 0.25;
         return (
           <g key={region.id}>
@@ -59,9 +59,9 @@ export default function SVGOverlay({
               x={first.x} y={first.y - 8 / zoom}
               fill={isSelected ? "#fff" : color}
               fontSize={labelSize}
-              fontFamily="-apple-system, 'SF Pro Text', system-ui, sans-serif"
+              fontFamily="'IBM Plex Mono', monospace"
               fontWeight="500"
-              letterSpacing="-0.01em"
+              letterSpacing="0.02em"
               style={{ pointerEvents: "none", userSelect: "none" }}
             >
               {region.name}

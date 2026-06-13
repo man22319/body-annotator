@@ -23,6 +23,7 @@ export function btnStyle(bg, fg, disabled) {
     transition: "background 0.15s, transform 0.1s",
     minHeight: 44,
     WebkitTapHighlightColor: "transparent",
+    touchAction: "manipulation",
   };
 }
 
@@ -38,6 +39,7 @@ export function toolbarBtnStyle(active) {
     minHeight: 44, minWidth: 44,
     display: "flex", alignItems: "center", justifyContent: "center",
     WebkitTapHighlightColor: "transparent",
+    touchAction: "manipulation",
   };
 }
 
@@ -54,5 +56,6 @@ export function iconBtnStyle(disabled) {
     minHeight: 44, minWidth: 44,
     display: "flex", alignItems: "center", justifyContent: "center",
     WebkitTapHighlightColor: "transparent",
+    touchAction: "manipulation",
   };
 }

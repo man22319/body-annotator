@@ -5,12 +5,15 @@ export default function Sidebar({
   isOpen, onClose,
   regionName, setRegionName, currentPoints,
   regions, hoveredId, setHoveredId, selectedId,
-  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onMirrorRegion, onExport,
+  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onRenameRegion, onExport,
   onUndo, onRedo, canUndo, canRedo,
 }) {
   const totalRegions = regions.length;
   const panelRef = useRef(null);
   const [closing, setClosing] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState("");
+  const editInputRef = useRef(null);
 
   // Animate close
   const handleClose = () => {
@@ -20,6 +23,14 @@ export default function Sidebar({
       onClose();
     }, 250);
   };
+
+  // Focus edit input when editing starts
+  useEffect(() => {
+    if (editingId && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingId]);
 
   // Prevent touch events on panel from propagating to canvas
   useEffect(() => {
@@ -44,6 +55,24 @@ export default function Sidebar({
       el.removeEventListener("touchmove", preventTouch);
     };
   }, [isOpen]);
+
+  const handleStartEdit = (region) => {
+    setEditingId(region.id);
+    setEditingName(region.name);
+  };
+
+  const handleCommitEdit = () => {
+    if (editingId && editingName.trim()) {
+      onRenameRegion?.(editingId, editingName.trim());
+    }
+    setEditingId(null);
+    setEditingName("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditingName("");
+  };
 
   if (!isOpen && !closing) return null;
 
@@ -101,6 +130,7 @@ export default function Sidebar({
               color: "var(--label-secondary)", fontSize: 16,
               display: "flex", alignItems: "center", justifyContent: "center",
               WebkitTapHighlightColor: "transparent",
+              touchAction: "manipulation",
             }}
           >
             ✕
@@ -129,9 +159,10 @@ export default function Sidebar({
               width: "100%", background: "rgba(0,0,0,0.3)",
               border: "1px solid var(--separator)",
               borderRadius: 10, color: "var(--label-primary)",
-              fontFamily: "'SF Mono', 'Menlo', monospace", fontSize: 14,
+              fontFamily: "'IBM Plex Mono', 'SF Mono', 'Menlo', monospace", fontSize: 14,
               padding: "10px 12px", marginBottom: 12, boxSizing: "border-box",
               outline: "none", minHeight: 44,
+              touchAction: "manipulation",
             }}
           />
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -182,6 +213,7 @@ export default function Sidebar({
             regions.map((region, ri) => {
               const color = getColor(ri);
               const isSelected = selectedId === region.id;
+              const isEditing = editingId === region.id;
               return (
                 <div
                   key={region.id}
@@ -196,22 +228,59 @@ export default function Sidebar({
                       : hoveredId === region.id ? "var(--separator)" : "transparent"}`,
                     minHeight: 44,
                     transition: "background 0.15s",
+                    touchAction: "manipulation",
                   }}
                 >
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 10, minWidth: 0,
-                  }}>
+                  <div
+                    style={{
+                      display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1,
+                      cursor: "pointer",
+                    }}
+                    onClick={() => !isEditing && handleStartEdit(region)}
+                  >
                     <div style={{
                       width: 10, height: 10, borderRadius: 3,
                       background: color, flexShrink: 0,
                     }} />
-                    <span style={{
-                      fontSize: 14, color: isSelected ? "var(--label-primary)" : "var(--label-secondary)",
-                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      fontWeight: isSelected ? 500 : 400,
-                    }}>
-                      {region.name}
-                    </span>
+                    {isEditing ? (
+                      <input
+                        ref={editInputRef}
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleCommitEdit();
+                          if (e.key === "Escape") handleCancelEdit();
+                        }}
+                        onBlur={handleCommitEdit}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        autoComplete="off"
+                        spellCheck={false}
+                        style={{
+                          fontSize: 14, color: "var(--label-primary)",
+                          background: "rgba(0,0,0,0.3)",
+                          border: "1px solid var(--tint-blue)",
+                          borderRadius: 6,
+                          padding: "4px 8px",
+                          fontFamily: "'IBM Plex Mono', 'SF Mono', 'Menlo', monospace",
+                          fontWeight: 500,
+                          outline: "none",
+                          minWidth: 0,
+                          width: "100%",
+                          minHeight: 36,
+                          touchAction: "manipulation",
+                        }}
+                      />
+                    ) : (
+                      <span style={{
+                        fontSize: 14, color: isSelected ? "var(--label-primary)" : "var(--label-secondary)",
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        fontWeight: isSelected ? 500 : 400,
+                        fontFamily: "'IBM Plex Mono', 'SF Mono', 'Menlo', monospace",
+                      }}>
+                        {region.name}
+                      </span>
+                    )}
                   </div>
                   <div style={{
                     display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
@@ -219,28 +288,6 @@ export default function Sidebar({
                     <span style={{ fontSize: 12, color: "var(--label-quaternary)" }}>
                       {region.points.length}pt
                     </span>
-                    <button
-                      onClick={() => onMirrorRegion(region.id)}
-                      style={{
-                        background: "rgba(10, 132, 255, 0.12)",
-                        border: "1px solid rgba(10, 132, 255, 0.25)",
-                        borderRadius: 8,
-                        color: "var(--tint-blue)",
-                        padding: "6px 8px",
-                        minWidth: 40, minHeight: 40,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        WebkitTapHighlightColor: "transparent",
-                      }}
-                      title="Mirror"
-                    >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="16 3 21 3 21 8" />
-                        <line x1="4" y1="20" x2="21" y2="3" />
-                        <polyline points="21 16 21 21 16 21" />
-                        <line x1="15" y1="15" x2="21" y2="21" />
-                        <line x1="4" y1="4" x2="9" y2="9" />
-                      </svg>
-                    </button>
                     <button
                       onClick={() => onDeleteRegion(region.id)}
                       style={{
@@ -252,6 +299,7 @@ export default function Sidebar({
                         minWidth: 40, minHeight: 40,
                         display: "flex", alignItems: "center", justifyContent: "center",
                         WebkitTapHighlightColor: "transparent",
+                        touchAction: "manipulation",
                       }}
                       title="Delete"
                     >

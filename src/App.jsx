@@ -366,30 +366,10 @@ export default function App() {
     if (selectedId === id) setSelectedId(null);
   }, [regions, selectedId, setRegions]);
 
-  const handleMirrorRegion = useCallback((id) => {
-    const source = regions.find(r => r.id === id);
-    if (!source) return;
-
-    let mirroredName;
-    if (/_l$/i.test(source.name)) {
-      mirroredName = source.name.replace(/_l$/i, '_r');
-    } else if (/_r$/i.test(source.name)) {
-      mirroredName = source.name.replace(/_r$/i, '_l');
-    } else {
-      mirroredName = source.name + '_mirrored';
-    }
-
-    const flippedPoints = source.points.map(([x, y]) => [1 - x, y]);
-    const validPoints = enforceWindingCCW(flippedPoints);
-
-    const newRegion = {
-      id: crypto.randomUUID(),
-      name: mirroredName,
-      points: validPoints,
-    };
-
-    setRegions([...regions, newRegion]);
+  const handleRenameRegion = useCallback((id, newName) => {
+    setRegions(regions.map(r => r.id === id ? { ...r, name: newName } : r));
   }, [regions, setRegions]);
+
 
   // -- Export --
   const handleExport = useCallback(() => {
@@ -636,7 +616,7 @@ export default function App() {
         onUndoPoint={handleUndoPoint}
         onDiscard={() => { resetStroke(); setGeoError(null); setWarningMsg(null); }}
         onDeleteRegion={handleDeleteRegion}
-        onMirrorRegion={handleMirrorRegion}
+        onRenameRegion={handleRenameRegion}
         onExport={handleExport}
         onUndo={undo}
         onRedo={redo}
