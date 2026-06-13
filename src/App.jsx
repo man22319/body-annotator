@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   newSegmentIntersectsPolygon,
-  wouldMakeUncloseable,
   validatePolygon,
   simplifyPolygon,
   enforceWindingCCW,
@@ -151,7 +150,7 @@ export default function App() {
       return;
     }
 
-    // Resolve snap from the pointer position
+    // Check for first-point closure snap
     const snap = activeSnapRef.current ?? computeSnap(e.clientX, e.clientY, "pen");
 
     if (snap?.isFirstPoint) {
@@ -161,19 +160,8 @@ export default function App() {
       return;
     }
 
-    let candidate;
-    let meta = null;
-
-    if (snap) {
-      candidate = snap.coords;
-      if (snap.regionId) {
-        meta = snap.isEdgeSnap
-          ? { regionId: snap.regionId, isEdgeSnap: true }
-          : { regionId: snap.regionId, pointIndex: snap.pointIndex, isEdgeSnap: false };
-      }
-    } else {
-      candidate = normCoords;
-    }
+    // Use raw coordinates — no other snapping
+    const candidate = normCoords;
 
     const pts = currentStroke.current.map(e => e.pt);
 
@@ -189,50 +177,11 @@ export default function App() {
 
     setGeoError(null);
 
-    // Shared-edge auto-close check
-    const firstEntry = currentStroke.current[0];
-    const firstMeta = firstEntry?.meta ?? null;
-    const isSharedEdgeClose =
-      meta &&
-      firstMeta &&
-      !meta.isEdgeSnap &&
-      !firstMeta.isEdgeSnap &&
-      meta.regionId === firstMeta.regionId &&
-      meta.pointIndex !== firstMeta.pointIndex &&
-      currentStroke.current.length >= 2;
-
-    if (isSharedEdgeClose) {
-      const tentative = [...currentStroke.current, { pt: candidate, meta }];
-      if (tentative.length >= 3) {
-        const tentativePts = tentative.map(e => e.pt);
-        const simplified = simplifyPolygon(tentativePts);
-        const validation = validatePolygon(simplified);
-        if (!validation.valid) {
-          setGeoError(`Invalid polygon on auto-close: ${validation.reason}`);
-          return;
-        }
-        const wound = enforceWindingCCW(simplified);
-        const name = regionName.trim() || `region_${regions.length + 1}`;
-        const region = { id: crypto.randomUUID(), name, points: wound };
-        setRegions([...regions, region]);
-        resetStroke();
-        setRegionName("");
-        activeSnapRef.current = null;
-        setActiveSnapDisplay(null);
-        setGeoError(null);
-        setWarningMsg(null);
-      } else {
-        currentStroke.current = tentative;
-        flushStroke();
-      }
-      return;
-    }
-
-    currentStroke.current = [...currentStroke.current, { pt: candidate, meta }];
+    currentStroke.current = [...currentStroke.current, { pt: candidate, meta: null }];
     flushStroke();
   }, [
-    image, mode, regionName, regions,
-    computeSnap, handleFinishRegion, wouldCreateIntersection, resetStroke, flushStroke, setRegions,
+    image, mode,
+    computeSnap, handleFinishRegion, wouldCreateIntersection, flushStroke,
   ]);
 
   const handlePencilMove = useCallback((normCoords, e) => {
@@ -241,17 +190,7 @@ export default function App() {
       const snap = computeSnap(e.clientX, e.clientY, "pen");
       activeSnapRef.current = snap;
       setActiveSnapDisplay(snap);
-
-      if (snap && !snap.isFirstPoint) {
-        const pts = currentStroke.current.map(e => e.pt);
-        if (pts.length >= 2 && wouldMakeUncloseable(pts, snap.coords)) {
-          setWarningMsg("Placing here will make the polygon impossible to close.");
-        } else {
-          setWarningMsg(null);
-        }
-      } else {
-        setWarningMsg(null);
-      }
+      setWarningMsg(null);
     } else {
       activeSnapRef.current = null;
       setActiveSnapDisplay(null);
@@ -543,7 +482,6 @@ export default function App() {
             transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
             transformOrigin: "center center",
             userSelect: "none",
-            transition: draggingId ? "none" : "transform 0.12s ease-out",
           }}>
             <img
               ref={imgRef}
@@ -568,7 +506,6 @@ export default function App() {
               mode={mode}
               activeSnapDisplay={activeSnapDisplay}
               closingWouldIntersect={closingWouldIntersect}
-              warningMsg={warningMsg}
               selectedId={selectedId}
               draggingId={draggingId}
               onPolygonPointerDown={handlePolygonPointerDown}

@@ -4,23 +4,23 @@ import { useCallback, useRef, useEffect } from "react";
  * useTouchGestures — Handles finger touch input for canvas navigation.
  *
  * - 1-finger drag → pan
- * - 2-finger pinch → zoom
+ * - 2-finger pinch → zoom + pan
  * - Double-tap → reset view
  *
- * Ignores all `pointerType === "pen"` events.
+ * Uses refs for zoom/panOffset to avoid stale closure bugs that cause
+ * the image to fly/teleport when panning and zooming simultaneously.
  *
- * @param {object} opts
- * @param {React.RefObject} opts.containerRef
- * @param {number} opts.zoom
- * @param {Function} opts.setZoom
- * @param {{ x: number, y: number }} opts.panOffset
- * @param {Function} opts.setPanOffset
- * @param {Function} opts.onDoubleTap - () => void
- * @returns {{ handlers }}
+ * Ignores all `pointerType === "pen"` events.
  */
 export function useTouchGestures({
   containerRef, zoom, setZoom, panOffset, setPanOffset, onDoubleTap,
 }) {
+  // Keep refs in sync so callbacks always see latest values
+  const zoomRef = useRef(zoom);
+  const panOffsetRef = useRef(panOffset);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+  useEffect(() => { panOffsetRef.current = panOffset; }, [panOffset]);
+
   // Track active touch pointers
   const activeTouches = useRef(new Map()); // pointerId -> { x, y }
   const panStart = useRef(null);
@@ -49,27 +49,27 @@ export function useTouchGestures({
     const touchCount = activeTouches.current.size;
 
     if (touchCount === 1) {
-      // Start potential pan
+      // Start potential pan — read from ref for latest value
       panStart.current = { x: e.clientX, y: e.clientY };
-      panOffsetStart.current = { ...panOffset };
+      panOffsetStart.current = { ...panOffsetRef.current };
       isPanning.current = false; // Will become true on move
     }
 
     if (touchCount === 2) {
-      // Start pinch zoom
+      // Start pinch zoom — read from refs for latest values
       isPanning.current = false;
       isPinching.current = true;
       const pts = Array.from(activeTouches.current.values());
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       pinchStartDist.current = dist;
-      pinchStartZoom.current = zoom;
+      pinchStartZoom.current = zoomRef.current;
       pinchStartCenter.current = {
         x: (pts[0].x + pts[1].x) / 2,
         y: (pts[0].y + pts[1].y) / 2,
       };
-      pinchStartPanOffset.current = { ...panOffset };
+      pinchStartPanOffset.current = { ...panOffsetRef.current };
     }
-  }, [panOffset, zoom]);
+  }, []); // No deps — reads from refs
 
   const handlePointerMove = useCallback((e) => {
     if (e.pointerType === "pen") return;
@@ -149,13 +149,13 @@ export function useTouchGestures({
       panOffsetStart.current = null;
       pinchStartDist.current = null;
     } else if (activeTouches.current.size === 1) {
-      // Dropped from pinch to one finger — restart pan from here
+      // Dropped from pinch to one finger — restart pan from here using ref
       isPinching.current = false;
       const remaining = Array.from(activeTouches.current.values())[0];
       panStart.current = { x: remaining.x, y: remaining.y };
-      panOffsetStart.current = { ...panOffset };
+      panOffsetStart.current = { ...panOffsetRef.current };
     }
-  }, [onDoubleTap, panOffset]);
+  }, [onDoubleTap]); // No panOffset dep — reads from ref
 
   const handlePointerCancel = useCallback((e) => {
     if (e.pointerType !== "touch") return;

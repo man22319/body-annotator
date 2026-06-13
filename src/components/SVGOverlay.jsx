@@ -3,7 +3,7 @@ import { getColor } from "../constants";
 export default function SVGOverlay({
   regions, currentPoints, zoom, bounds,
   hoveredId, setHoveredId, mode,
-  activeSnapDisplay, closingWouldIntersect, warningMsg,
+  activeSnapDisplay, closingWouldIntersect,
   selectedId, draggingId,
   onPolygonPointerDown,
 }) {
@@ -82,23 +82,6 @@ export default function SVGOverlay({
         />
       )}
 
-      {/* Preview segment: last point to snap/cursor */}
-      {currentPoints.length >= 1 && activeSnapDisplay && !activeSnapDisplay.isFirstPoint && (() => {
-        const last = toXY(currentPoints[currentPoints.length - 1]);
-        const next = toXY(activeSnapDisplay.coords);
-        const isUncloseable = warningMsg != null;
-        return (
-          <line
-            x1={last.x} y1={last.y}
-            x2={next.x} y2={next.y}
-            stroke={isUncloseable ? "#666" : "rgba(192, 192, 192, 0.5)"}
-            strokeWidth={1.5 / zoom}
-            strokeDasharray={`${4 / zoom} ${3 / zoom}`}
-            vectorEffect="non-scaling-stroke"
-            style={{ pointerEvents: "none" }}
-          />
-        );
-      })()}
 
       {/* Closing preview */}
       {currentPoints.length >= 3 && activeSnapDisplay?.isFirstPoint && (() => {
@@ -131,65 +114,31 @@ export default function SVGOverlay({
         );
       })}
 
-      {/* Snap indicator */}
-      {activeSnapDisplay && (() => {
+      {/* Snap indicator — only for first-point closure */}
+      {activeSnapDisplay?.isFirstPoint && (() => {
         const { x, y } = toXY(activeSnapDisplay.coords);
         const sw = 2 / zoom;
-
-        if (activeSnapDisplay.isEdgeSnap) {
-          if (!b) return null;
-          const region = regions.find(r => r.id === activeSnapDisplay.regionId);
-          if (!region) return null;
-          const pts = region.points;
-          const ai = activeSnapDisplay.pointIndex;
-          const bi = (ai + 1) % pts.length;
-          const ex = pts[bi][0] * b.width  - pts[ai][0] * b.width;
-          const ey = pts[bi][1] * b.height - pts[ai][1] * b.height;
-          const elen = Math.hypot(ex, ey) || 1;
-          const px = -ey / elen, py = ex / elen;
-          const tickLen = 8 / zoom;
-          return (
-            <g style={{ pointerEvents: "none" }}>
-              <line
-                x1={pts[ai][0] * b.width}  y1={pts[ai][1] * b.height}
-                x2={pts[bi][0] * b.width}  y2={pts[bi][1] * b.height}
-                stroke="#a0a0a0" strokeWidth={2.5 / zoom}
-                strokeLinecap="round" vectorEffect="non-scaling-stroke"
-              />
-              <line
-                x1={x - px * tickLen} y1={y - py * tickLen}
-                x2={x + px * tickLen} y2={y + py * tickLen}
-                stroke="#a0a0a0" strokeWidth={sw}
-                strokeLinecap="round" vectorEffect="non-scaling-stroke"
-              />
-              <circle cx={x} cy={y} r={4 / zoom} fill="#a0a0a0" vectorEffect="non-scaling-stroke" />
-            </g>
-          );
-        }
-
-        const r = (activeSnapDisplay.isFirstPoint ? 10 : 7) / zoom;
+        const r = 10 / zoom;
         const fontSize = 11 / zoom;
         const labelOffset = 14 / zoom;
         return (
           <g style={{ pointerEvents: "none" }}>
             <circle
               cx={x} cy={y} r={r}
-              fill={activeSnapDisplay.isFirstPoint ? "rgba(200, 200, 200, 0.15)" : "rgba(180, 180, 180, 0.12)"}
-              stroke={activeSnapDisplay.isFirstPoint ? "#d0d0d0" : "#b0b0b0"}
+              fill="rgba(200, 200, 200, 0.15)"
+              stroke="#d0d0d0"
               strokeWidth={sw}
               strokeDasharray={`${4 / zoom} ${3 / zoom}`}
             />
-            {activeSnapDisplay.isFirstPoint && (
-              <text
-                x={x + labelOffset} y={y + fontSize * 0.4}
-                fill="#d0d0d0" fontSize={fontSize}
-                fontFamily="'IBM Plex Mono', monospace"
-                fontWeight="600"
-                style={{ pointerEvents: "none", userSelect: "none" }}
-              >
-                Close
-              </text>
-            )}
+            <text
+              x={x + labelOffset} y={y + fontSize * 0.4}
+              fill="#d0d0d0" fontSize={fontSize}
+              fontFamily="'IBM Plex Mono', monospace"
+              fontWeight="600"
+              style={{ pointerEvents: "none", userSelect: "none" }}
+            >
+              Close
+            </text>
           </g>
         );
       })()}
