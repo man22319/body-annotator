@@ -5,7 +5,7 @@ export default function Sidebar({
   isOpen, onClose,
   regionName, setRegionName, currentPoints,
   regions, hoveredId, setHoveredId, selectedId,
-  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onRenameRegion, onExport,
+  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onRenameRegion, onExport, onImport,
   onUndo, onRedo, canUndo, canRedo,
 }) {
   const totalRegions = regions.length;
@@ -336,16 +336,27 @@ export default function Sidebar({
               Redo
             </button>
           </div>
-          <button
-            onClick={onExport}
-            disabled={totalRegions === 0}
-            style={{
-              ...btnStyle("#1a1a1a", "#c0c0c0", totalRegions === 0),
-              width: "100%",
-            }}
-          >
-            Export JSON
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={onExport}
+              disabled={totalRegions === 0}
+              style={{
+                ...btnStyle("#1a1a1a", "#c0c0c0", totalRegions === 0),
+                flex: 1,
+              }}
+            >
+              Export JSON
+            </button>
+            <button
+              onClick={onImport}
+              style={{
+                ...btnStyle("#1a1a1a", "#a0a0a0", false),
+                flex: 1,
+              }}
+            >
+              Import JSON
+            </button>
+          </div>
         </div>
       </div>
     </>

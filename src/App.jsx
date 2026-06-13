@@ -57,6 +57,7 @@ export default function App() {
   const containerRef = useRef(null);
   const imgRef = useRef(null);
   const fileInputRef = useRef(null);
+  const jsonInputRef = useRef(null);
 
   // -- Stroke helpers --
   const flushStroke = useCallback(() => {
@@ -400,6 +401,38 @@ export default function App() {
     downloadJSON(output);
   }, [regions]);
 
+  // -- Import --
+  const handleImportJSON = useCallback((e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        const imported = [];
+        for (const [name, value] of Object.entries(data)) {
+          if (value && Array.isArray(value.points) && value.points.length >= 3) {
+            imported.push({
+              id: crypto.randomUUID(),
+              name,
+              points: value.points.map(([x, y]) => [x, y]),
+            });
+          }
+        }
+        if (imported.length === 0) {
+          alert("No valid regions found in the JSON file.");
+          return;
+        }
+        setRegions([...regions, ...imported]);
+      } catch (err) {
+        alert(`Failed to parse JSON: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+    // Reset so the same file can be re-imported
+    e.target.value = "";
+  }, [regions, setRegions]);
+
   // -- Derived --
   const closingWouldIntersect =
     currentPoints.length >= 3 &&
@@ -467,6 +500,14 @@ export default function App() {
           accept="image/*"
           style={{ display: "none" }}
           onChange={handleImageUpload}
+        />
+        {/* Hidden JSON file input for importing regions */}
+        <input
+          ref={jsonInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: "none" }}
+          onChange={handleImportJSON}
         />
 
         {!image ? (
@@ -618,6 +659,7 @@ export default function App() {
         onDeleteRegion={handleDeleteRegion}
         onRenameRegion={handleRenameRegion}
         onExport={handleExport}
+        onImport={() => jsonInputRef.current?.click()}
         onUndo={undo}
         onRedo={redo}
         canUndo={canUndo}

@@ -1,7 +1,20 @@
 export const REGION_COLORS = [
-  "#c0c0c0","#a0a0a0","#808080","#d0d0d0",
-  "#b0b0b0","#909090","#e0e0e0","#707070",
-  "#c8c8c8","#989898","#b8b8b8","#a8a8a8",
+  "#FF6B6B", // coral red
+  "#4ECDC4", // teal
+  "#FFE66D", // golden yellow
+  "#A78BFA", // soft purple
+  "#FF9F43", // tangerine
+  "#2ED573", // emerald green
+  "#54A0FF", // sky blue
+  "#FF6B81", // pink
+  "#1DD1A1", // mint
+  "#F368E0", // magenta
+  "#FECA57", // lemon
+  "#48DBFB", // cyan
+  "#FF9FF3", // light pink
+  "#00D2D3", // aqua
+  "#C44569", // berry
+  "#F8B500", // amber
 ];
 
 export function getColor(index) {
