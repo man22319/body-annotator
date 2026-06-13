@@ -25,14 +25,23 @@ export default function Sidebar({
   useEffect(() => {
     const el = panelRef.current;
     if (!el) return;
-    const stop = (e) => e.stopPropagation();
-    el.addEventListener("pointerdown", stop, { passive: false });
-    el.addEventListener("pointermove", stop, { passive: false });
-    el.addEventListener("pointerup", stop, { passive: false });
+    const stop = (e) => {
+      e.stopPropagation();
+    };
+    // Stop propagation to canvas but allow default behavior (scrolling, button clicks)
+    el.addEventListener("pointerdown", stop, { passive: true });
+    el.addEventListener("pointermove", stop, { passive: true });
+    el.addEventListener("pointerup", stop, { passive: true });
+    // Also prevent native touch gestures from leaking to canvas
+    const preventTouch = (e) => e.stopPropagation();
+    el.addEventListener("touchstart", preventTouch, { passive: true });
+    el.addEventListener("touchmove", preventTouch, { passive: true });
     return () => {
       el.removeEventListener("pointerdown", stop);
       el.removeEventListener("pointermove", stop);
       el.removeEventListener("pointerup", stop);
+      el.removeEventListener("touchstart", preventTouch);
+      el.removeEventListener("touchmove", preventTouch);
     };
   }, [isOpen]);
 
@@ -68,6 +77,7 @@ export default function Sidebar({
             : "slideInRight 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards",
           paddingTop: "var(--safe-top)",
           paddingBottom: "var(--safe-bottom)",
+          touchAction: "manipulation",
         }}
       >
         {/* Panel header */}
@@ -154,7 +164,7 @@ export default function Sidebar({
         </div>
 
         {/* Region list */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", WebkitOverflowScrolling: "touch" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}>
           <div style={{
             color: "var(--label-tertiary)", fontSize: 12, fontWeight: 600,
             letterSpacing: "0.02em", textTransform: "uppercase", marginBottom: 10,
@@ -204,7 +214,7 @@ export default function Sidebar({
                     </span>
                   </div>
                   <div style={{
-                    display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
+                    display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
                   }}>
                     <span style={{ fontSize: 12, color: "var(--label-quaternary)" }}>
                       {region.points.length}pt
@@ -212,30 +222,45 @@ export default function Sidebar({
                     <button
                       onClick={() => onMirrorRegion(region.id)}
                       style={{
-                        background: "none", border: "none",
+                        background: "rgba(10, 132, 255, 0.12)",
+                        border: "1px solid rgba(10, 132, 255, 0.25)",
+                        borderRadius: 8,
                         color: "var(--tint-blue)",
-                        fontSize: 18, padding: "4px 6px",
-                        minWidth: 36, minHeight: 36,
+                        padding: "6px 8px",
+                        minWidth: 40, minHeight: 40,
                         display: "flex", alignItems: "center", justifyContent: "center",
                         WebkitTapHighlightColor: "transparent",
                       }}
                       title="Mirror"
                     >
-                      ◨
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="16 3 21 3 21 8" />
+                        <line x1="4" y1="20" x2="21" y2="3" />
+                        <polyline points="21 16 21 21 16 21" />
+                        <line x1="15" y1="15" x2="21" y2="21" />
+                        <line x1="4" y1="4" x2="9" y2="9" />
+                      </svg>
                     </button>
                     <button
                       onClick={() => onDeleteRegion(region.id)}
                       style={{
-                        background: "none", border: "none",
+                        background: "rgba(255, 69, 58, 0.12)",
+                        border: "1px solid rgba(255, 69, 58, 0.25)",
+                        borderRadius: 8,
                         color: "var(--tint-red)",
-                        fontSize: 16, padding: "4px 6px",
-                        minWidth: 36, minHeight: 36,
+                        padding: "6px 8px",
+                        minWidth: 40, minHeight: 40,
                         display: "flex", alignItems: "center", justifyContent: "center",
                         WebkitTapHighlightColor: "transparent",
                       }}
                       title="Delete"
                     >
-                      ✕
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <line x1="10" y1="11" x2="10" y2="17" />
+                        <line x1="14" y1="11" x2="14" y2="17" />
+                      </svg>
                     </button>
                   </div>
                 </div>

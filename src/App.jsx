@@ -56,6 +56,7 @@ export default function App() {
   // -- Refs --
   const containerRef = useRef(null);
   const imgRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // -- Stroke helpers --
   const flushStroke = useCallback(() => {
@@ -479,12 +480,26 @@ export default function App() {
         onPointerLeave={pencilHandlers.onPointerLeave}
         onContextMenu={(e) => e.preventDefault()}
       >
+        {/* Hidden file input — triggered explicitly to bypass touch event suppression */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: "none" }}
+          onChange={handleImageUpload}
+        />
+
         {!image ? (
-          <label style={{
-            display: "flex", flexDirection: "column", alignItems: "center",
-            gap: 16, padding: 40,
-            touchAction: "manipulation",
-          }}>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              display: "flex", flexDirection: "column", alignItems: "center",
+              gap: 16, padding: 40,
+              background: "none", border: "none", cursor: "pointer",
+              touchAction: "manipulation",
+              WebkitTapHighlightColor: "transparent",
+            }}
+          >
             <div style={{
               width: 100, height: 100,
               border: "2px dashed var(--separator)",
@@ -500,8 +515,7 @@ export default function App() {
             }}>
               Tap to load image
             </span>
-            <input type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
-          </label>
+          </button>
         ) : (
           <div style={{
             position: "relative",
@@ -560,24 +574,27 @@ export default function App() {
         )}
 
         {image && (
-          <label style={{
-            position: "absolute", bottom: `calc(12px + var(--safe-bottom))`, left: 12,
-            fontSize: 13, color: "var(--label-tertiary)",
-            background: "var(--material-thick)",
-            backdropFilter: "blur(20px) saturate(180%)",
-            WebkitBackdropFilter: "blur(20px) saturate(180%)",
-            padding: "8px 14px",
-            border: "1px solid var(--separator)",
-            borderRadius: 10, zIndex: 10,
-            fontWeight: 500,
-            minHeight: 36,
-            display: "flex", alignItems: "center",
-            WebkitTapHighlightColor: "transparent",
-            touchAction: "manipulation",
-          }}>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              position: "absolute", bottom: `calc(12px + var(--safe-bottom))`, left: 12,
+              fontSize: 13, color: "var(--label-tertiary)",
+              background: "var(--material-thick)",
+              backdropFilter: "blur(20px) saturate(180%)",
+              WebkitBackdropFilter: "blur(20px) saturate(180%)",
+              padding: "8px 14px",
+              border: "1px solid var(--separator)",
+              borderRadius: 10, zIndex: 10,
+              fontWeight: 500,
+              minHeight: 36,
+              display: "flex", alignItems: "center",
+              WebkitTapHighlightColor: "transparent",
+              touchAction: "manipulation",
+              fontFamily: "inherit",
+            }}
+          >
             Swap image
-            <input type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
-          </label>
+          </button>
         )}
 
         {/* Drawing mode indicator */}
