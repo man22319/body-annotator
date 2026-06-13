@@ -1,24 +1,11 @@
-export const REGION_COLORS = [
-  "#FF6B6B", // coral red
-  "#4ECDC4", // teal
-  "#FFE66D", // golden yellow
-  "#A78BFA", // soft purple
-  "#FF9F43", // tangerine
-  "#2ED573", // emerald green
-  "#54A0FF", // sky blue
-  "#FF6B81", // pink
-  "#1DD1A1", // mint
-  "#F368E0", // magenta
-  "#FECA57", // lemon
-  "#48DBFB", // cyan
-  "#FF9FF3", // light pink
-  "#00D2D3", // aqua
-  "#C44569", // berry
-  "#F8B500", // amber
-];
+// Golden-angle color generator — infinite distinct colors
+const GOLDEN_ANGLE = 137.508;
 
 export function getColor(index) {
-  return REGION_COLORS[index % REGION_COLORS.length];
+  const hue = (index * GOLDEN_ANGLE) % 360;
+  const saturation = 70 + (index % 3) * 10;   // 70-90%
+  const lightness = 60 + (index % 4) * 5;      // 60-75%
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 
 // iPadOS-optimized button styles — 44pt minimum touch targets
