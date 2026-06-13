@@ -27,11 +27,11 @@
   --label-secondary: rgba(235, 235, 245, 0.6);
   --label-tertiary: rgba(235, 235, 245, 0.3);
   --label-quaternary: rgba(235, 235, 245, 0.18);
-  --tint-blue: #0a84ff;
-  --tint-green: #30d158;
-  --tint-red: #ff453a;
-  --tint-yellow: #ffd60a;
-  --tint-purple: #bf5af2;
+  --tint-blue: #a0a0a0;
+  --tint-green: #b8b8b8;
+  --tint-red: #888888;
+  --tint-yellow: #c0c0c0;
+  --tint-purple: #909090;
 }
 
 html, body, #root {

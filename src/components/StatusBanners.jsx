@@ -3,8 +3,8 @@ export function ErrorBanner({ message, onDismiss }) {
   return (
     <div style={{
       position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
-      background: "rgba(255, 69, 58, 0.12)", border: "1px solid rgba(255, 69, 58, 0.3)",
-      color: "#ff6961",
+      background: "rgba(100, 100, 100, 0.15)", border: "1px solid rgba(150, 150, 150, 0.25)",
+      color: "#a0a0a0",
       padding: "10px 16px", borderRadius: 12, fontSize: 14,
       fontFamily: "-apple-system, 'SF Pro Text', system-ui, sans-serif",
       fontWeight: 500,
@@ -19,10 +19,11 @@ export function ErrorBanner({ message, onDismiss }) {
       <button onClick={onDismiss}
         style={{
           background: "none", border: "none",
-          color: "#ff453a", fontSize: 18,
+          color: "#888", fontSize: 18,
           padding: "4px 8px", minHeight: 36, minWidth: 36,
           display: "flex", alignItems: "center", justifyContent: "center",
           WebkitTapHighlightColor: "transparent",
+          touchAction: "manipulation",
         }}
       >
         ✕
@@ -36,8 +37,8 @@ export function WarningBanner({ message }) {
   return (
     <div style={{
       position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
-      background: "rgba(255, 214, 10, 0.1)", border: "1px solid rgba(255, 214, 10, 0.25)",
-      color: "#ffd60a",
+      background: "rgba(120, 120, 120, 0.1)", border: "1px solid rgba(150, 150, 150, 0.2)",
+      color: "#b0b0b0",
       padding: "10px 16px", borderRadius: 12, fontSize: 14,
       fontFamily: "-apple-system, 'SF Pro Text', system-ui, sans-serif",
       fontWeight: 500,

@@ -75,7 +75,7 @@ export default function SVGOverlay({
         <polyline
           points={toSVGStr(currentPoints)}
           fill="none"
-          stroke="#ffd60a"
+          stroke="#c0c0c0"
           strokeWidth={2 / zoom}
           strokeDasharray={`${5 / zoom} ${3 / zoom}`}
           vectorEffect="non-scaling-stroke"
@@ -91,7 +91,7 @@ export default function SVGOverlay({
           <line
             x1={last.x} y1={last.y}
             x2={next.x} y2={next.y}
-            stroke={isUncloseable ? "#ff453a" : "#ffd60a88"}
+            stroke={isUncloseable ? "#666" : "rgba(192, 192, 192, 0.5)"}
             strokeWidth={1.5 / zoom}
             strokeDasharray={`${4 / zoom} ${3 / zoom}`}
             vectorEffect="non-scaling-stroke"
@@ -108,7 +108,7 @@ export default function SVGOverlay({
           <line
             x1={last.x} y1={last.y}
             x2={first.x} y2={first.y}
-            stroke={closingWouldIntersect ? "#ff453a" : "#30d15888"}
+            stroke={closingWouldIntersect ? "#666" : "rgba(200, 200, 200, 0.5)"}
             strokeWidth={1.5 / zoom}
             strokeDasharray={`${4 / zoom} ${3 / zoom}`}
             vectorEffect="non-scaling-stroke"
@@ -124,7 +124,7 @@ export default function SVGOverlay({
         return (
           <circle
             key={i} cx={x} cy={y} r={r}
-            fill={i === 0 ? "#ffd60a" : "#fde68a"}
+            fill={i === 0 ? "#e0e0e0" : "#b0b0b0"}
             stroke="#0f0f0f" strokeWidth={1.5 / zoom}
             vectorEffect="non-scaling-stroke"
           />
@@ -153,16 +153,16 @@ export default function SVGOverlay({
               <line
                 x1={pts[ai][0] * b.width}  y1={pts[ai][1] * b.height}
                 x2={pts[bi][0] * b.width}  y2={pts[bi][1] * b.height}
-                stroke="#bf5af2" strokeWidth={2.5 / zoom}
+                stroke="#a0a0a0" strokeWidth={2.5 / zoom}
                 strokeLinecap="round" vectorEffect="non-scaling-stroke"
               />
               <line
                 x1={x - px * tickLen} y1={y - py * tickLen}
                 x2={x + px * tickLen} y2={y + py * tickLen}
-                stroke="#bf5af2" strokeWidth={sw}
+                stroke="#a0a0a0" strokeWidth={sw}
                 strokeLinecap="round" vectorEffect="non-scaling-stroke"
               />
-              <circle cx={x} cy={y} r={4 / zoom} fill="#bf5af2" vectorEffect="non-scaling-stroke" />
+              <circle cx={x} cy={y} r={4 / zoom} fill="#a0a0a0" vectorEffect="non-scaling-stroke" />
             </g>
           );
         }
@@ -174,16 +174,16 @@ export default function SVGOverlay({
           <g style={{ pointerEvents: "none" }}>
             <circle
               cx={x} cy={y} r={r}
-              fill={activeSnapDisplay.isFirstPoint ? "rgba(48, 209, 88, 0.2)" : "rgba(255, 214, 10, 0.15)"}
-              stroke={activeSnapDisplay.isFirstPoint ? "#30d158" : "#ffd60a"}
+              fill={activeSnapDisplay.isFirstPoint ? "rgba(200, 200, 200, 0.15)" : "rgba(180, 180, 180, 0.12)"}
+              stroke={activeSnapDisplay.isFirstPoint ? "#d0d0d0" : "#b0b0b0"}
               strokeWidth={sw}
               strokeDasharray={`${4 / zoom} ${3 / zoom}`}
             />
             {activeSnapDisplay.isFirstPoint && (
               <text
                 x={x + labelOffset} y={y + fontSize * 0.4}
-                fill="#30d158" fontSize={fontSize}
-                fontFamily="-apple-system, 'SF Pro Text', system-ui, sans-serif"
+                fill="#d0d0d0" fontSize={fontSize}
+                fontFamily="'IBM Plex Mono', monospace"
                 fontWeight="600"
                 style={{ pointerEvents: "none", userSelect: "none" }}
               >

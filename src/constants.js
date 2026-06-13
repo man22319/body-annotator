@@ -1,7 +1,7 @@
 export const REGION_COLORS = [
-  "#ef4444","#f97316","#eab308","#22c55e",
-  "#06b6d4","#6366f1","#ec4899","#14b8a6",
-  "#f59e0b","#84cc16","#8b5cf6","#f43f5e",
+  "#c0c0c0","#a0a0a0","#808080","#d0d0d0",
+  "#b0b0b0","#909090","#e0e0e0","#707070",
+  "#c8c8c8","#989898","#b8b8b8","#a8a8a8",
 ];
 
 export function getColor(index) {
@@ -13,7 +13,7 @@ export function btnStyle(bg, fg, disabled) {
   return {
     background: disabled ? "#1a1a1a" : bg,
     color: disabled ? "#444" : fg,
-    border: `1px solid ${disabled ? "#2a2a2a" : fg + "44"}`,
+    border: `1px solid ${disabled ? "#2a2a2a" : "rgba(255,255,255,0.12)"}`,
     borderRadius: 10, padding: "10px 16px", fontSize: 14,
     fontFamily: "-apple-system, 'SF Pro Text', system-ui, sans-serif",
     fontWeight: 500,
@@ -29,8 +29,8 @@ export function btnStyle(bg, fg, disabled) {
 
 export function toolbarBtnStyle(active) {
   return {
-    background: active ? "rgba(10, 132, 255, 0.18)" : "transparent",
-    color: active ? "#0a84ff" : "rgba(235, 235, 245, 0.6)",
+    background: active ? "rgba(255, 255, 255, 0.12)" : "transparent",
+    color: active ? "#e0e0e0" : "rgba(235, 235, 245, 0.6)",
     border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 14,
     fontFamily: "-apple-system, 'SF Pro Text', system-ui, sans-serif",
     fontWeight: 500,

@@ -169,14 +169,14 @@ export default function Sidebar({
             <button
               onClick={onFinishRegion}
               disabled={currentPoints.length < 3}
-              style={{ ...btnStyle("#0a2a4a", "#0a84ff", currentPoints.length < 3), flex: 1 }}
+              style={{ ...btnStyle("#1a1a1a", "#c0c0c0", currentPoints.length < 3), flex: 1 }}
             >
               Finish ({currentPoints.length}pt)
             </button>
             <button
               onClick={onUndoPoint}
               disabled={currentPoints.length === 0}
-              style={{ ...btnStyle("#2a1a1a", "#ff453a", currentPoints.length === 0), flex: 1 }}
+              style={{ ...btnStyle("#1a1a1a", "#909090", currentPoints.length === 0), flex: 1 }}
             >
               Undo Pt
             </button>
@@ -222,9 +222,9 @@ export default function Sidebar({
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     padding: "10px 12px", marginBottom: 4, borderRadius: 10,
-                    background: isSelected ? "rgba(10, 132, 255, 0.12)"
+                    background: isSelected ? "rgba(200, 200, 200, 0.08)"
                       : hoveredId === region.id ? "rgba(255,255,255,0.04)" : "transparent",
-                    border: `1px solid ${isSelected ? "rgba(10, 132, 255, 0.25)"
+                    border: `1px solid ${isSelected ? "rgba(200, 200, 200, 0.15)"
                       : hoveredId === region.id ? "var(--separator)" : "transparent"}`,
                     minHeight: 44,
                     transition: "background 0.15s",
@@ -291,10 +291,10 @@ export default function Sidebar({
                     <button
                       onClick={() => onDeleteRegion(region.id)}
                       style={{
-                        background: "rgba(255, 69, 58, 0.12)",
-                        border: "1px solid rgba(255, 69, 58, 0.25)",
+                        background: "rgba(120, 120, 120, 0.12)",
+                        border: "1px solid rgba(120, 120, 120, 0.25)",
                         borderRadius: 8,
-                        color: "var(--tint-red)",
+                        color: "#888",
                         padding: "6px 8px",
                         minWidth: 40, minHeight: 40,
                         display: "flex", alignItems: "center", justifyContent: "center",
@@ -325,13 +325,13 @@ export default function Sidebar({
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
             <button
               onClick={onUndo} disabled={!canUndo}
-              style={{ ...btnStyle("#0a1a2a", "#0a84ff", !canUndo), flex: 1 }}
+              style={{ ...btnStyle("#1a1a1a", "#a0a0a0", !canUndo), flex: 1 }}
             >
               Undo
             </button>
             <button
               onClick={onRedo} disabled={!canRedo}
-              style={{ ...btnStyle("#0a1a2a", "#0a84ff", !canRedo), flex: 1 }}
+              style={{ ...btnStyle("#1a1a1a", "#a0a0a0", !canRedo), flex: 1 }}
             >
               Redo
             </button>
@@ -340,7 +340,7 @@ export default function Sidebar({
             onClick={onExport}
             disabled={totalRegions === 0}
             style={{
-              ...btnStyle("#0a2a0a", "#30d158", totalRegions === 0),
+              ...btnStyle("#1a1a1a", "#c0c0c0", totalRegions === 0),
               width: "100%",
             }}
           >

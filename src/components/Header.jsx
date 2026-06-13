@@ -30,7 +30,7 @@ export default function Header({ totalRegions, onTogglePanel }) {
         style={{
           background: "rgba(255,255,255,0.08)",
           border: "none", borderRadius: 8,
-          color: "var(--tint-blue)",
+          color: "var(--label-secondary)",
           fontSize: 14, fontWeight: 500,
           padding: "8px 14px",
           minHeight: 36,
