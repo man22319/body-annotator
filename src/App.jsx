@@ -228,10 +228,31 @@ export default function App() {
   // Touch gestures — finger pan, pinch-zoom, double-tap
   // =====================================================
 
-  const handleDoubleTap = useCallback(() => {
-    setZoom(1);
-    setPanOffset({ x: 0, y: 0 });
+  // Compute the pan offset that centers the image in the container at a given zoom
+  const getCenterOffset = useCallback((z = 1) => {
+    const container = containerRef.current;
+    const img = imgRef.current;
+    if (!container || !img) return { x: 0, y: 0 };
+    const cRect = container.getBoundingClientRect();
+    return {
+      x: (cRect.width - img.offsetWidth * z) / 2,
+      y: (cRect.height - img.offsetHeight * z) / 2,
+    };
   }, []);
+
+  // Center the image when it first loads / resizes
+  useEffect(() => {
+    if (!bounds) return;
+    const offset = getCenterOffset(1);
+    setZoom(1);
+    setPanOffset(offset);
+  }, [bounds, getCenterOffset]);
+
+  const handleDoubleTap = useCallback(() => {
+    const offset = getCenterOffset(1);
+    setZoom(1);
+    setPanOffset(offset);
+  }, [getCenterOffset]);
 
   const { handlers: touchHandlers } = useTouchGestures({
     containerRef,
@@ -445,7 +466,6 @@ export default function App() {
         ref={containerRef}
         style={{
           flex: 1, position: "relative", overflow: "hidden", background: "#0a0a0a",
-          display: "flex", alignItems: "center", justifyContent: "center",
           touchAction: "none",
         }}
         onPointerDown={mergedPointerDown}
@@ -476,6 +496,8 @@ export default function App() {
           <button
             onClick={() => fileInputRef.current?.click()}
             style={{
+              position: "absolute", top: "50%", left: "50%",
+              transform: "translate(-50%, -50%)",
               display: "flex", flexDirection: "column", alignItems: "center",
               gap: 16, padding: 40,
               background: "none", border: "none", cursor: "pointer",
@@ -503,7 +525,7 @@ export default function App() {
           <div style={{
             position: "relative",
             transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
-            transformOrigin: "center center",
+            transformOrigin: "0 0",
             userSelect: "none",
           }}>
             <img
@@ -546,9 +568,39 @@ export default function App() {
             mode={mode}
             zoom={zoom}
             onToggleMode={() => setMode(m => m === "draw" ? "pan" : "draw")}
-            onZoomIn={() => setZoom(z => Math.min(30, z * 1.15))}
-            onZoomOut={() => setZoom(z => Math.max(0.1, z / 1.15))}
-            onResetView={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
+            onZoomIn={() => {
+              const container = containerRef.current;
+              if (!container) { setZoom(z => Math.min(30, z * 1.15)); return; }
+              const rect = container.getBoundingClientRect();
+              const cx = rect.width / 2;
+              const cy = rect.height / 2;
+              setZoom(prevZoom => {
+                const newZoom = Math.min(30, prevZoom * 1.15);
+                const scale = newZoom / prevZoom;
+                setPanOffset(prev => ({
+                  x: cx - scale * (cx - prev.x),
+                  y: cy - scale * (cy - prev.y),
+                }));
+                return newZoom;
+              });
+            }}
+            onZoomOut={() => {
+              const container = containerRef.current;
+              if (!container) { setZoom(z => Math.max(0.1, z / 1.15)); return; }
+              const rect = container.getBoundingClientRect();
+              const cx = rect.width / 2;
+              const cy = rect.height / 2;
+              setZoom(prevZoom => {
+                const newZoom = Math.max(0.1, prevZoom / 1.15);
+                const scale = newZoom / prevZoom;
+                setPanOffset(prev => ({
+                  x: cx - scale * (cx - prev.x),
+                  y: cy - scale * (cy - prev.y),
+                }));
+                return newZoom;
+              });
+            }}
+            onResetView={() => { setZoom(1); setPanOffset(getCenterOffset(1)); }}
             onUndo={currentPoints.length > 0 ? handleUndoPoint : undo}
             onRedo={redo}
             canUndo={currentPoints.length > 0 || canUndo}

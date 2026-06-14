@@ -80,23 +80,31 @@ export function useTouchGestures({
     const touchCount = activeTouches.current.size;
 
     if (touchCount === 2 && isPinching.current && pinchStartDist.current) {
-      // Pinch zoom
+      // Pinch zoom with focal-point correction for transformOrigin "0 0"
       const pts = Array.from(activeTouches.current.values());
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       const scale = dist / pinchStartDist.current;
       const newZoom = Math.min(30, Math.max(0.1, pinchStartZoom.current * scale));
       setZoom(newZoom);
 
-      // Also pan during pinch to keep center stable
+      // Current pinch center in viewport/container coordinates
       const center = {
         x: (pts[0].x + pts[1].x) / 2,
         y: (pts[0].y + pts[1].y) / 2,
       };
-      const dx = center.x - pinchStartCenter.current.x;
-      const dy = center.y - pinchStartCenter.current.y;
+
+      // The pinch center at start, in container-relative coords, maps to a
+      // content-space point. We want that same content-space point to now
+      // appear under the *current* pinch center, at the *new* zoom level.
+      //
+      // contentPt = (pinchCenterStart - panOffsetStart) / zoomStart
+      // newPanOffset = currentPinchCenter - contentPt * newZoom
+      const zoomStart = pinchStartZoom.current;
+      const contentX = (pinchStartCenter.current.x - pinchStartPanOffset.current.x) / zoomStart;
+      const contentY = (pinchStartCenter.current.y - pinchStartPanOffset.current.y) / zoomStart;
       setPanOffset({
-        x: pinchStartPanOffset.current.x + dx,
-        y: pinchStartPanOffset.current.y + dy,
+        x: center.x - contentX * newZoom,
+        y: center.y - contentY * newZoom,
       });
     } else if (touchCount === 1 && panStart.current && !isPinching.current) {
       // Pan
