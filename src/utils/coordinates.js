@@ -32,20 +32,41 @@ export function getSnapThreshold(pointerType) {
 }
 
 /**
- * resolveSnap — Only snaps to the first point of the current polygon (for closure).
- * All other snapping (vertices/edges of completed regions) is disabled.
+ * resolveSnap — Snaps to:
+ *   1. First point of current polygon (highest priority — for closure)
+ *   2. Any vertex of a completed region (for shared-boundary alignment)
  */
 export function resolveSnap(clientX, clientY, rect, currentPoints, regions, pointerType = "pen") {
   const SNAP_THRESHOLD_PX = getSnapThreshold(pointerType);
 
-  // Only snap: first vertex (closure)
+  // Priority 1: first vertex of current polygon (closure snap)
   if (currentPoints.length >= 3) {
     const first = currentPoints[0];
     const s = normToScreen(first, rect);
     if (screenDist(clientX, clientY, s.x, s.y) < SNAP_THRESHOLD_PX) {
-      return { coords: first, isFirstPoint: true };
+      return { coords: first, isFirstPoint: true, isRegionSnap: false };
     }
   }
 
-  return null;
+  // Priority 2: vertices of completed regions (boundary snap)
+  let bestDist = SNAP_THRESHOLD_PX;
+  let bestSnap = null;
+
+  for (const region of regions) {
+    for (const pt of region.points) {
+      const s = normToScreen(pt, rect);
+      const d = screenDist(clientX, clientY, s.x, s.y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestSnap = {
+          coords: pt,
+          isFirstPoint: false,
+          isRegionSnap: true,
+          regionName: region.name,
+        };
+      }
+    }
+  }
+
+  return bestSnap;
 }

@@ -1,11 +1,12 @@
 import { getColor } from "../constants";
 
 export default function SVGOverlay({
-  regions, currentPoints, zoom, bounds,
+  regions, originalRegions, currentPoints, zoom, bounds,
   hoveredId, setHoveredId, mode,
   activeSnapDisplay, closingWouldIntersect,
   selectedId, draggingId,
   onPolygonPointerDown,
+  rdpPreview,
 }) {
   if (!bounds) return null;
   const b = bounds;
@@ -22,6 +23,25 @@ export default function SVGOverlay({
         touchAction: "none",
       }}
     >
+      {/* RDP preview: faded original polygons */}
+      {rdpPreview && originalRegions && originalRegions.map((region, ri) => {
+        const color = getColor(ri);
+        const pts = toSVGStr(region.points);
+        return (
+          <polygon
+            key={`orig-${region.id}`}
+            points={pts}
+            fill="none"
+            stroke={color}
+            strokeWidth={1 / zoom}
+            strokeOpacity={0.25}
+            strokeDasharray={`${4 / zoom} ${3 / zoom}`}
+            vectorEffect="non-scaling-stroke"
+            style={{ pointerEvents: "none" }}
+          />
+        );
+      })}
+
       {/* Completed regions */}
       {regions.map((region, ri) => {
         const color = getColor(ri);
@@ -33,6 +53,13 @@ export default function SVGOverlay({
         const sw = (isSelected ? 2.5 : isHovered ? 2 : 1.5) / zoom;
         const labelSize = 9 / zoom;
         const fillOpacity = isDragging ? 0.5 : isSelected ? 0.4 : isHovered ? 0.35 : 0.25;
+
+        // Vertex count badge for RDP preview
+        const origCount = rdpPreview && region._originalPoints
+          ? region._originalPoints.length
+          : null;
+        const currentCount = region.points.length;
+
         return (
           <g key={region.id}>
             <polygon
@@ -66,6 +93,20 @@ export default function SVGOverlay({
             >
               {region.name}
             </text>
+            {/* RDP vertex reduction badge */}
+            {rdpPreview && origCount !== null && (
+              <text
+                x={first.x} y={first.y + labelSize + 4 / zoom}
+                fill={color}
+                fontSize={8 / zoom}
+                fontFamily="'IBM Plex Mono', monospace"
+                fontWeight="400"
+                opacity={0.7}
+                style={{ pointerEvents: "none", userSelect: "none" }}
+              >
+                {origCount}pt → {currentCount}pt ({Math.round((1 - currentCount / origCount) * 100)}%)
+              </text>
+            )}
           </g>
         );
       })}
@@ -114,7 +155,7 @@ export default function SVGOverlay({
         );
       })}
 
-      {/* Snap indicator — only for first-point closure */}
+      {/* Snap indicator — first-point closure */}
       {activeSnapDisplay?.isFirstPoint && (() => {
         const { x, y } = toXY(activeSnapDisplay.coords);
         const sw = 2 / zoom;
@@ -138,6 +179,39 @@ export default function SVGOverlay({
               style={{ pointerEvents: "none", userSelect: "none" }}
             >
               Close
+            </text>
+          </g>
+        );
+      })()}
+
+      {/* Snap indicator — region vertex snap */}
+      {activeSnapDisplay?.isRegionSnap && (() => {
+        const { x, y } = toXY(activeSnapDisplay.coords);
+        const sw = 2 / zoom;
+        const r = 8 / zoom;
+        const fontSize = 10 / zoom;
+        const labelOffset = 12 / zoom;
+        return (
+          <g style={{ pointerEvents: "none" }}>
+            <circle
+              cx={x} cy={y} r={r}
+              fill="rgba(80, 200, 200, 0.15)"
+              stroke="#50c8c8"
+              strokeWidth={sw}
+            />
+            {/* Small crosshair inside */}
+            <line x1={x - 4 / zoom} y1={y} x2={x + 4 / zoom} y2={y}
+              stroke="#50c8c8" strokeWidth={1 / zoom} opacity={0.6} />
+            <line x1={x} y1={y - 4 / zoom} x2={x} y2={y + 4 / zoom}
+              stroke="#50c8c8" strokeWidth={1 / zoom} opacity={0.6} />
+            <text
+              x={x + labelOffset} y={y + fontSize * 0.4}
+              fill="#50c8c8" fontSize={fontSize}
+              fontFamily="'IBM Plex Mono', monospace"
+              fontWeight="600"
+              style={{ pointerEvents: "none", userSelect: "none" }}
+            >
+              Snap: {activeSnapDisplay.regionName}
             </text>
           </g>
         );

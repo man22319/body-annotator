@@ -1,12 +1,17 @@
 import { useState, useRef, useEffect } from "react";
 import { getColor, btnStyle } from "../constants";
+import { rdpSimplify } from "../utils/rdp";
 
 export default function Sidebar({
   isOpen, onClose,
   regionName, setRegionName, currentPoints,
   regions, hoveredId, setHoveredId, selectedId,
-  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onRenameRegion, onExport, onImport,
+  onFinishRegion, onUndoPoint, onDiscard, onDeleteRegion, onRenameRegion,
+  onExportGymPlan, onExportRaw, onImport,
   onUndo, onRedo, canUndo, canRedo,
+  rdpEpsilon, setRdpEpsilon, rdpPreview, setRdpPreview, onApplyRdp,
+  exportView, setExportView,
+  nameSuffix, setNameSuffix,
 }) {
   const totalRegions = regions.length;
   const panelRef = useRef(null);
@@ -74,6 +79,11 @@ export default function Sidebar({
     setEditingName("");
   };
 
+  // Compute the effective region name with suffix
+  const effectiveName = regionName.trim()
+    ? regionName.trim() + (nameSuffix !== "none" ? nameSuffix : "")
+    : "";
+
   if (!isOpen && !closing) return null;
 
   return (
@@ -94,7 +104,7 @@ export default function Sidebar({
         style={{
           position: "fixed",
           top: 0, right: 0, bottom: 0,
-          width: 320, maxWidth: "85vw",
+          width: 340, maxWidth: "88vw",
           background: "var(--material-thick)",
           backdropFilter: "blur(40px) saturate(180%)",
           WebkitBackdropFilter: "blur(40px) saturate(180%)",
@@ -145,26 +155,74 @@ export default function Sidebar({
           }}>
             New Region
           </div>
-          <input
-            value={regionName}
-            onChange={e => setRegionName(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") onFinishRegion(); }}
-            placeholder="region_name"
-            autoCapitalize="none"
-            autoCorrect="off"
-            autoComplete="off"
-            spellCheck={false}
-            inputMode="text"
-            style={{
-              width: "100%", background: "rgba(0,0,0,0.3)",
-              border: "1px solid var(--separator)",
-              borderRadius: 10, color: "var(--label-primary)",
-              fontFamily: "'IBM Plex Mono', 'SF Mono', 'Menlo', monospace", fontSize: 14,
-              padding: "10px 12px", marginBottom: 12, boxSizing: "border-box",
-              outline: "none", minHeight: 44,
-              touchAction: "manipulation",
-            }}
-          />
+
+          {/* Name input row + suffix selector */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <input
+              value={regionName}
+              onChange={e => setRegionName(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") onFinishRegion(); }}
+              placeholder="muscle_name"
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              inputMode="text"
+              style={{
+                flex: 1, minWidth: 0, background: "rgba(0,0,0,0.3)",
+                border: "1px solid var(--separator)",
+                borderRadius: 10, color: "var(--label-primary)",
+                fontFamily: "'IBM Plex Mono', 'SF Mono', 'Menlo', monospace", fontSize: 14,
+                padding: "10px 12px", boxSizing: "border-box",
+                outline: "none", minHeight: 44,
+                touchAction: "manipulation",
+              }}
+            />
+            {/* Suffix selector */}
+            <div style={{
+              display: "flex", borderRadius: 10, overflow: "hidden",
+              border: "1px solid var(--separator)", flexShrink: 0,
+            }}>
+              {[
+                { value: "none", label: "—" },
+                { value: "_l", label: "_l" },
+                { value: "_r", label: "_r" },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setNameSuffix(opt.value)}
+                  style={{
+                    background: nameSuffix === opt.value ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.3)",
+                    color: nameSuffix === opt.value ? "var(--label-primary)" : "var(--label-quaternary)",
+                    border: "none",
+                    padding: "8px 10px",
+                    fontSize: 13,
+                    fontFamily: "'IBM Plex Mono', 'SF Mono', monospace",
+                    fontWeight: nameSuffix === opt.value ? 600 : 400,
+                    minHeight: 44,
+                    cursor: "pointer",
+                    WebkitTapHighlightColor: "transparent",
+                    touchAction: "manipulation",
+                    transition: "background 0.15s, color 0.15s",
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Preview of effective name */}
+          {regionName.trim() && (
+            <div style={{
+              fontSize: 12, color: "var(--label-tertiary)",
+              fontFamily: "'IBM Plex Mono', monospace",
+              marginBottom: 10, paddingLeft: 2,
+            }}>
+              → {effectiveName}
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <button
               onClick={onFinishRegion}
@@ -214,6 +272,15 @@ export default function Sidebar({
               const color = getColor(ri);
               const isSelected = selectedId === region.id;
               const isEditing = editingId === region.id;
+
+              // RDP stats for this region
+              const rdpCount = rdpEpsilon > 0
+                ? rdpSimplify(region.points, rdpEpsilon).length
+                : region.points.length;
+              const reduction = rdpEpsilon > 0 && region.points.length > 0
+                ? Math.round((1 - rdpCount / region.points.length) * 100)
+                : 0;
+
               return (
                 <div
                   key={region.id}
@@ -286,7 +353,10 @@ export default function Sidebar({
                     display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
                   }}>
                     <span style={{ fontSize: 12, color: "var(--label-quaternary)" }}>
-                      {region.points.length}pt
+                      {rdpEpsilon > 0
+                        ? <>{region.points.length}→{rdpCount}<span style={{ color: reduction > 0 ? "#50c8c8" : "inherit" }}> −{reduction}%</span></>
+                        : <>{region.points.length}pt</>
+                      }
                     </span>
                     <button
                       onClick={() => onDeleteRegion(region.id)}
@@ -317,11 +387,108 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Footer */}
+        {/* RDP Simplification section */}
         <div style={{
           padding: "12px 16px",
           borderTop: "1px solid var(--separator)",
         }}>
+          <div style={{
+            color: "var(--label-tertiary)", fontSize: 12, fontWeight: 600,
+            letterSpacing: "0.02em", textTransform: "uppercase", marginBottom: 10,
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span>RDP Simplify</span>
+            <span style={{
+              fontSize: 12, fontWeight: 400, textTransform: "none",
+              fontFamily: "'IBM Plex Mono', monospace",
+              color: "var(--label-quaternary)",
+            }}>
+              ε = {rdpEpsilon.toFixed(4)}
+            </span>
+          </div>
+
+          <input
+            type="range"
+            min="0"
+            max="0.05"
+            step="0.0005"
+            value={rdpEpsilon}
+            onChange={(e) => setRdpEpsilon(parseFloat(e.target.value))}
+            style={{
+              width: "100%", marginBottom: 10,
+              accentColor: "#50c8c8",
+            }}
+          />
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => setRdpPreview(p => !p)}
+              disabled={rdpEpsilon <= 0}
+              style={{
+                ...btnStyle(
+                  rdpPreview ? "rgba(80, 200, 200, 0.15)" : "#1a1a1a",
+                  rdpPreview ? "#50c8c8" : "#a0a0a0",
+                  rdpEpsilon <= 0,
+                ),
+                flex: 1,
+                border: rdpPreview ? "1px solid rgba(80, 200, 200, 0.3)" : undefined,
+              }}
+            >
+              {rdpPreview ? "Previewing" : "Preview"}
+            </button>
+            <button
+              onClick={onApplyRdp}
+              disabled={rdpEpsilon <= 0 || totalRegions === 0}
+              style={{ ...btnStyle("#1a1a1a", "#c0c0c0", rdpEpsilon <= 0 || totalRegions === 0), flex: 1 }}
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+
+        {/* Footer — Export controls */}
+        <div style={{
+          padding: "12px 16px",
+          borderTop: "1px solid var(--separator)",
+        }}>
+          {/* View selector */}
+          <div style={{
+            color: "var(--label-tertiary)", fontSize: 12, fontWeight: 600,
+            letterSpacing: "0.02em", textTransform: "uppercase", marginBottom: 8,
+          }}>
+            Export View
+          </div>
+          <div style={{
+            display: "flex", borderRadius: 10, overflow: "hidden",
+            border: "1px solid var(--separator)", marginBottom: 12,
+          }}>
+            {["front", "back", "left", "right"].map(view => (
+              <button
+                key={view}
+                onClick={() => setExportView(view)}
+                style={{
+                  flex: 1,
+                  background: exportView === view ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.2)",
+                  color: exportView === view ? "var(--label-primary)" : "var(--label-quaternary)",
+                  border: "none",
+                  padding: "8px 4px",
+                  fontSize: 12,
+                  fontWeight: exportView === view ? 600 : 400,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  textTransform: "capitalize",
+                  minHeight: 36,
+                  cursor: "pointer",
+                  WebkitTapHighlightColor: "transparent",
+                  touchAction: "manipulation",
+                  transition: "background 0.15s, color 0.15s",
+                }}
+              >
+                {view}
+              </button>
+            ))}
+          </div>
+
+          {/* Undo / Redo */}
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
             <button
               onClick={onUndo} disabled={!canUndo}
@@ -336,27 +503,39 @@ export default function Sidebar({
               Redo
             </button>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+
+          {/* Export buttons */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <button
-              onClick={onExport}
+              onClick={onExportGymPlan}
               disabled={totalRegions === 0}
               style={{
                 ...btnStyle("#1a1a1a", "#c0c0c0", totalRegions === 0),
-                flex: 1,
+                flex: 2,
               }}
             >
-              Export JSON
+              Export Gym Plan
             </button>
             <button
-              onClick={onImport}
+              onClick={onExportRaw}
+              disabled={totalRegions === 0}
               style={{
-                ...btnStyle("#1a1a1a", "#a0a0a0", false),
+                ...btnStyle("#1a1a1a", "#808080", totalRegions === 0),
                 flex: 1,
               }}
             >
-              Import JSON
+              Raw
             </button>
           </div>
+          <button
+            onClick={onImport}
+            style={{
+              ...btnStyle("#1a1a1a", "#a0a0a0", false),
+              width: "100%",
+            }}
+          >
+            Import JSON
+          </button>
         </div>
       </div>
     </>

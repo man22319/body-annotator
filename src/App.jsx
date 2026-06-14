@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   newSegmentIntersectsPolygon,
   validatePolygon,
@@ -7,8 +7,9 @@ import {
   isNearDuplicate,
 } from "./utils/geometry";
 import { resolveSnap } from "./utils/coordinates";
-import { quantize, downloadJSON } from "./utils/export";
+import { downloadJSON, buildRawExport, buildGymPlanExport } from "./utils/export";
 import { useHistory } from "./utils/history";
+import { rdpSimplify } from "./utils/rdp";
 
 import { usePencilDraw } from "./utils/usePencilDraw";
 import { useTouchGestures } from "./utils/useTouchGestures";
@@ -38,6 +39,14 @@ export default function App() {
   const [geoError, setGeoError] = useState(null);
   const [warningMsg, setWarningMsg] = useState(null);
   const [panelOpen, setPanelOpen] = useState(false);
+
+  // -- RDP state --
+  const [rdpEpsilon, setRdpEpsilon] = useState(0);
+  const [rdpPreview, setRdpPreview] = useState(false);
+
+  // -- Export state --
+  const [exportView, setExportView] = useState("front");
+  const [nameSuffix, setNameSuffix] = useState("none"); // "none" | "_l" | "_r"
 
   // -- Viewport --
   const [zoom, setZoom] = useState(1);
@@ -128,7 +137,9 @@ export default function App() {
     }
 
     const wound = enforceWindingCCW(simplified);
-    const name = regionName.trim() || `region_${regions.length + 1}`;
+    const baseName = regionName.trim() || `region_${regions.length + 1}`;
+    const suffix = nameSuffix !== "none" ? nameSuffix : "";
+    const name = baseName + suffix;
     const region = { id: crypto.randomUUID(), name, points: wound };
     setRegions([...regions, region]);
     resetStroke();
@@ -137,7 +148,7 @@ export default function App() {
     setActiveSnapDisplay(null);
     setGeoError(null);
     setWarningMsg(null);
-  }, [regionName, regions, wouldClosingIntersect, resetStroke, setRegions]);
+  }, [regionName, nameSuffix, regions, wouldClosingIntersect, resetStroke, setRegions]);
 
   // =====================================================
   // Apple Pencil — point placement via pencil taps
@@ -150,7 +161,7 @@ export default function App() {
       return;
     }
 
-    // Check for first-point closure snap
+    // Check for snap targets
     const snap = activeSnapRef.current ?? computeSnap(e.clientX, e.clientY, "pen");
 
     if (snap?.isFirstPoint) {
@@ -160,8 +171,8 @@ export default function App() {
       return;
     }
 
-    // Use raw coordinates — no other snapping
-    const candidate = normCoords;
+    // Use snap coordinates if snapping to an existing region vertex, else raw
+    const candidate = snap?.isRegionSnap ? snap.coords : normCoords;
 
     const pts = currentStroke.current.map(e => e.pt);
 
@@ -311,33 +322,45 @@ export default function App() {
   }, [regions, setRegions]);
 
 
-  // -- Export --
-  const handleExport = useCallback(() => {
-    const output = {};
-    const errors = [];
+  // -- RDP preview regions (computed, not stored) --
+  const previewRegions = useMemo(() => {
+    if (!rdpPreview || rdpEpsilon <= 0) return regions;
+    return regions.map(r => ({
+      ...r,
+      _originalPoints: r.points,
+      points: rdpSimplify(r.points, rdpEpsilon),
+    }));
+  }, [regions, rdpEpsilon, rdpPreview]);
 
-    for (const region of regions) {
-      const key = region.name;
-      const validation = validatePolygon(region.points);
-      if (!validation.valid) {
-        errors.push(`${key}: ${validation.reason}`);
-        continue;
-      }
-      const simplified = simplifyPolygon(region.points);
-      const wound = enforceWindingCCW(simplified);
-      const quantized = wound.map(([x, y]) => [quantize(x), quantize(y)]);
-      output[key] = {
-        winding: "ccw",
-        pointCount: quantized.length,
-        points: quantized,
-      };
-    }
+  // -- Apply RDP permanently --
+  const handleApplyRdp = useCallback(() => {
+    if (rdpEpsilon <= 0) return;
+    const updated = regions.map(r => ({
+      ...r,
+      points: rdpSimplify(r.points, rdpEpsilon),
+    }));
+    setRegions(updated);
+    setRdpPreview(false);
+  }, [regions, rdpEpsilon, setRegions]);
 
+  // -- Export for Gym Plan (structured) --
+  const handleExportGymPlan = useCallback(() => {
+    const { output, errors } = buildGymPlanExport(regions, exportView, rdpEpsilon);
     if (errors.length > 0) {
       alert(`Export blocked — invalid polygon(s):\n\n${errors.join("\n")}\n\nDelete and redraw the affected regions.`);
       return;
     }
-    downloadJSON(output);
+    downloadJSON(output, `muscles_${exportView}.json`);
+  }, [regions, exportView, rdpEpsilon]);
+
+  // -- Export raw (original format) --
+  const handleExportRaw = useCallback(() => {
+    const { output, errors } = buildRawExport(regions);
+    if (errors.length > 0) {
+      alert(`Export blocked — invalid polygon(s):\n\n${errors.join("\n")}\n\nDelete and redraw the affected regions.`);
+      return;
+    }
+    downloadJSON(output, "regions_raw.json");
   }, [regions]);
 
   // -- Import --
@@ -497,7 +520,8 @@ export default function App() {
               }}
             />
             <SVGOverlay
-              regions={regions}
+              regions={rdpPreview ? previewRegions : regions}
+              originalRegions={rdpPreview ? regions : null}
               currentPoints={currentPoints}
               zoom={zoom}
               bounds={bounds}
@@ -509,6 +533,7 @@ export default function App() {
               selectedId={selectedId}
               draggingId={draggingId}
               onPolygonPointerDown={handlePolygonPointerDown}
+              rdpPreview={rdpPreview}
             />
           </div>
         )}
@@ -595,12 +620,22 @@ export default function App() {
         onDiscard={() => { resetStroke(); setGeoError(null); setWarningMsg(null); }}
         onDeleteRegion={handleDeleteRegion}
         onRenameRegion={handleRenameRegion}
-        onExport={handleExport}
+        onExportGymPlan={handleExportGymPlan}
+        onExportRaw={handleExportRaw}
         onImport={() => jsonInputRef.current?.click()}
         onUndo={undo}
         onRedo={redo}
         canUndo={canUndo}
         canRedo={canRedo}
+        rdpEpsilon={rdpEpsilon}
+        setRdpEpsilon={setRdpEpsilon}
+        rdpPreview={rdpPreview}
+        setRdpPreview={setRdpPreview}
+        onApplyRdp={handleApplyRdp}
+        exportView={exportView}
+        setExportView={setExportView}
+        nameSuffix={nameSuffix}
+        setNameSuffix={setNameSuffix}
       />
     </div>
   );
