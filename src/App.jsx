@@ -50,6 +50,8 @@ export default function App() {
 
   // -- Viewport --
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(zoom);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [mode, setMode] = useState("draw");
 
@@ -92,6 +94,17 @@ export default function App() {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         setBounds({ width, height });
+        // Center the image when it first loads / resizes
+        const container = containerRef.current;
+        const img = imgRef.current;
+        if (container && img) {
+          const cRect = container.getBoundingClientRect();
+          const z = zoomRef.current ?? 1;
+          setPanOffset({
+            x: (cRect.width - img.offsetWidth * z) / 2,
+            y: (cRect.height - img.offsetHeight * z) / 2,
+          });
+        }
       }
     });
     observer.observe(imgRef.current);
@@ -240,13 +253,6 @@ export default function App() {
     };
   }, []);
 
-  // Center the image when it first loads / resizes
-  useEffect(() => {
-    if (!bounds) return;
-    const offset = getCenterOffset(1);
-    setZoom(1);
-    setPanOffset(offset);
-  }, [bounds, getCenterOffset]);
 
   const handleDoubleTap = useCallback(() => {
     const offset = getCenterOffset(1);
