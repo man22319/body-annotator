@@ -7,7 +7,7 @@ export default function Header({ totalRegions, onTogglePanel }) {
       background: "var(--material-thick)",
       backdropFilter: "blur(20px) saturate(180%)",
       WebkitBackdropFilter: "blur(20px) saturate(180%)",
-      zIndex: 5,
+      zIndex: 15,
       minHeight: 44,
     }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>

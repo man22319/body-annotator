@@ -1,10 +1,30 @@
+import { useCallback } from "react";
 import { iconBtnStyle, toolbarBtnStyle } from "../constants";
+
+// Helper: wraps a callback so it fires on Apple Pencil pointerUp too
+function usePencilTap(callback, disabled) {
+  return useCallback((e) => {
+    if (disabled) return;
+    if (e.pointerType === "pen") {
+      e.preventDefault();
+      e.stopPropagation();
+      callback();
+    }
+  }, [callback, disabled]);
+}
 
 export default function Toolbar({
   mode, zoom,
   onToggleMode, onZoomIn, onZoomOut, onResetView,
   onUndo, onRedo, canUndo, canRedo,
 }) {
+  // Pencil-tap handlers for all interactive buttons
+  const pencilUndo = usePencilTap(onUndo, !canUndo);
+  const pencilRedo = usePencilTap(onRedo, !canRedo);
+  const pencilToggleMode = usePencilTap(onToggleMode, false);
+  const pencilZoomIn = usePencilTap(onZoomIn, false);
+  const pencilZoomOut = usePencilTap(onZoomOut, false);
+  const pencilResetView = usePencilTap(onResetView, false);
   return (
     <div style={{
       position: "absolute",
@@ -21,6 +41,7 @@ export default function Toolbar({
       {/* Draw / Pan toggle */}
       <button
         onClick={onToggleMode}
+        onPointerUp={pencilToggleMode}
         style={toolbarBtnStyle(mode === "draw")}
         title="Draw Mode"
       >
@@ -33,6 +54,7 @@ export default function Toolbar({
       </button>
       <button
         onClick={onToggleMode}
+        onPointerUp={pencilToggleMode}
         style={toolbarBtnStyle(mode === "pan")}
         title="Pan Mode"
       >
@@ -49,13 +71,13 @@ export default function Toolbar({
       <Divider />
 
       {/* Undo / Redo */}
-      <button onClick={onUndo} disabled={!canUndo} style={iconBtnStyle(!canUndo)} title="Undo">
+      <button onClick={onUndo} onPointerUp={pencilUndo} disabled={!canUndo} style={iconBtnStyle(!canUndo)} title="Undo">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="1 4 1 10 7 10" />
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
         </svg>
       </button>
-      <button onClick={onRedo} disabled={!canRedo} style={iconBtnStyle(!canRedo)} title="Redo">
+      <button onClick={onRedo} onPointerUp={pencilRedo} disabled={!canRedo} style={iconBtnStyle(!canRedo)} title="Redo">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="23 4 23 10 17 10" />
           <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" />
@@ -65,7 +87,7 @@ export default function Toolbar({
       <Divider />
 
       {/* Zoom */}
-      <button onClick={onZoomOut} style={iconBtnStyle(false)} title="Zoom Out">
+      <button onClick={onZoomOut} onPointerUp={pencilZoomOut} style={iconBtnStyle(false)} title="Zoom Out">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -79,7 +101,7 @@ export default function Toolbar({
       }}>
         {Math.round(zoom * 100)}%
       </span>
-      <button onClick={onZoomIn} style={iconBtnStyle(false)} title="Zoom In">
+      <button onClick={onZoomIn} onPointerUp={pencilZoomIn} style={iconBtnStyle(false)} title="Zoom In">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -90,7 +112,7 @@ export default function Toolbar({
 
       <Divider />
 
-      <button onClick={onResetView} style={iconBtnStyle(false)} title="Reset View">
+      <button onClick={onResetView} onPointerUp={pencilResetView} style={iconBtnStyle(false)} title="Reset View">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 3h7v7H3z" />
           <path d="M14 3h7v7h-7z" />

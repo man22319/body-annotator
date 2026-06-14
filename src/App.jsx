@@ -156,7 +156,9 @@ export default function App() {
     const region = { id: crypto.randomUUID(), name, points: wound };
     setRegions([...regions, region]);
     resetStroke();
-    setRegionName("");
+    // Keep regionName for autofill; auto-swap _l <-> _r suffix
+    if (nameSuffix === "_l") setNameSuffix("_r");
+    else if (nameSuffix === "_r") setNameSuffix("_l");
     activeSnapRef.current = null;
     setActiveSnapDisplay(null);
     setGeoError(null);
